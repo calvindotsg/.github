@@ -79,3 +79,13 @@ echo "  1. Set homepage URL:  gh repo edit ${REPO} --homepage <url>"
 echo "  2. Set topics:        gh repo edit ${REPO} --add-topic <topic>"
 echo "  3. Set status checks: gh api --method PUT repos/${REPO}/branches/main/protection --input <payload>"
 echo "  4. Sidebar (About gear icon): uncheck Deployments and Packages if not used"
+
+# --- Template detection (optional nudge) ---
+TEMPLATE_SOURCE=$(gh api "repos/${REPO}" --jq '.template_repository.full_name // empty' 2>/dev/null || true)
+if [ -n "${TEMPLATE_SOURCE}" ]; then
+  echo ""
+  echo "==> Detected template source: ${TEMPLATE_SOURCE}"
+  echo "  If you haven't already, clone this repo and run:"
+  echo "    bash scripts/init.sh"
+  echo "  to substitute placeholder values."
+fi
