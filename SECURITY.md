@@ -16,4 +16,11 @@ You will receive an acknowledgment within **7 days**. We will work with you to u
 
 ## Scope
 
-Projects under `calvindotsg` are local CLI tools that read files on your machine. They do not transmit data to external services or accept network connections.
+This policy applies to every repository under `calvindotsg`.
+
+Most are local CLI tools that read files on your machine, where the relevant risks are unintended file access, privilege escalation, and arbitrary code execution. Two categories behave differently and are worth calling out explicitly:
+
+- **The Homebrew tap** installs software, so install-time integrity is in scope: checksum handling, download sources, and any code that runs during installation.
+- **The website** is deployed, calls third-party APIs, and ships analytics. It does make outbound network requests and does handle credentials in its build pipeline.
+
+Please do not assume a given project is network-isolated — check its README before relying on that.
