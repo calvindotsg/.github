@@ -21,20 +21,28 @@ Files in this repository are automatically inherited by all `calvindotsg` repos 
 
 ## Setup Script
 
-`scripts/setup-repo.sh` applies universal repository settings via `gh` CLI:
+`scripts/setup-repo.sh` applies a shared baseline to **one repository at a time**. It is opt-in: nothing in this repo applies it automatically, and it has not been run against every `calvindotsg` repo. Treat the list below as what the script *does*, not as a description of any given repo's current state.
 
 - Squash-only merges with PR title + description
 - Auto-delete branches on merge, auto-merge enabled
 - Wiki and Projects disabled
 - Dependabot alerts and security updates
 - Private vulnerability reporting
-- Branch protection (PRs required, enforce admins, no force push)
+- Branch protection (PRs required, enforce admins, no force push) — status check names are set separately, since they vary per CI matrix
 
 ```bash
 ./scripts/setup-repo.sh calvindotsg/<repo-name>
 ```
 
 Project-specific settings (homepage, topics, status check names) are set separately — the script prints a reminder.
+
+To check whether a repo has actually had the baseline applied:
+
+```bash
+gh api repos/calvindotsg/<repo-name>/branches/main/protection
+```
+
+A `404 Branch not protected` means it has not.
 
 ## Related
 
