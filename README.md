@@ -38,6 +38,6 @@ Project-specific settings (homepage, topics, status check names) are set separat
 
 ## Related
 
-- **Template repos** (`template-python-cli`, `template-typescript-cli`): scaffold new projects with boilerplate code
+- **Template repos** (private): scaffold new projects with boilerplate code
 - **This repo**: provides community files + settings script
 - **Workflow**: create from template → run setup script → set project-specific values
