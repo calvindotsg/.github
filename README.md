@@ -30,6 +30,14 @@ Files in this repository are automatically inherited by all `calvindotsg` repos 
 - Private vulnerability reporting
 - Branch protection (PRs required, enforce admins, no force push) — status check names are set separately, since they vary per CI matrix
 
+It also **reports** — writing nothing — on whether Dependabot *version* updates are actually
+live. That one is a report rather than a setting because GitHub gives it no API: alerts and
+security updates have endpoints, version updates are enabled solely by a `dependabot.yml`
+existing, and nothing tells you whether it is running. The failure it catches is real and
+silent: a fork inherits a valid config at fork time and GitHub withholds version updates from
+it until someone clicks Enable, so the file looks configured, opens nothing, and the pins go
+stale anyway. `calvindotsg/portfolio-v2` sat like that for 17 days.
+
 ```bash
 ./scripts/setup-repo.sh calvindotsg/<repo-name>
 ```
