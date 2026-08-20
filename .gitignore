@@ -1,0 +1,40 @@
+# This file is NOT inherited. GitHub's default community health files are limited to
+# CODE_OF_CONDUCT, CONTRIBUTING, discussion category forms, FUNDING, GOVERNANCE, issue and
+# pull request templates with config.yml, SECURITY and SUPPORT. `.gitignore` is not on that
+# list, so nothing here reaches the other 39 repositories — it applies to this one only.
+#
+# Deliberately short. This repository holds Markdown, YAML templates and one bash script:
+# no build, no dependency tree, no language runtime, and therefore no build artefacts to
+# exclude. Every entry below is here because it has actually appeared in this working tree
+# or because tooling used on this repository creates it. Nothing is here by template.
+
+# --- macOS ---
+# .DS_Store is the one that genuinely turns up; the rest are resource-fork debris that
+# appears when files round-trip through a non-HFS volume or an archive.
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# --- Claude Code ---
+# `.claude/` itself is meant to be committed — settings.json, agents and skills are shared
+# project config. Two exceptions:
+#   - worktrees/ holds full nested checkouts created by EnterWorktree or `--worktree`, which
+#     would otherwise show up as a large untracked directory
+#   - *.local.json is per-developer override, and is gitignored by Claude Code's own
+#     convention rather than shared
+.claude/worktrees/
+.claude/*.local.json
+.claude/**/*.log
+CLAUDE.local.md
+
+# --- Scratch working files ---
+# Handover notes, copy-paste instructions for steps that need a human, and throwaway test
+# harnesses. Never committed.
+.scratchpad/
+
+# --- Editors ---
+.idea/
+.vscode/
+*~
+*.swp
