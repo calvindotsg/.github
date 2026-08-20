@@ -2,7 +2,10 @@
 
 ## Supported Versions
 
-Only the latest minor release is supported with security updates.
+This file is inherited by every `calvindotsg` repository that does not define its own, and most of
+them cut no releases at all. So there is no fleet-wide version policy to state: **assume only the
+default branch is maintained** unless a repository's own README or releases page says otherwise.
+Where a project does publish releases, security fixes go to the latest minor release.
 
 ## Reporting a Vulnerability
 
@@ -17,7 +20,9 @@ repositories, where GitHub does not offer the feature, and on any public reposit
 not been enabled — email <security@calvin.sg> instead. Please do not open a public issue for a
 security report.
 
-You will receive an acknowledgment within **7 days**. We will work with you to understand the issue and coordinate a fix before any public disclosure.
+These are personal projects maintained by one person, so treat response time as best-effort
+rather than a guarantee: the aim is to acknowledge within **7 days**. Reports are worked through
+with the reporter and a fix coordinated before any public disclosure.
 
 ## Scope
 
