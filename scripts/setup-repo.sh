@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- Abort reporting ---
+# The writes below land in sequence, so an abort part-way through leaves the repository in a
+# mixed state — auto-merge and branch deletion on, branch protection absent — with nothing to
+# say so. The most reachable trigger is the documented workflow itself: a repo created from a
+# template with no first commit has no `main`, so the branch-protection call 404s. Private repos
+# hit the same shape earlier, at the public-only private-vulnerability-reporting PUT.
+#
+# ${LINENO} in an ERR trap reports the LAST line of a multi-line command — for the
+# branch-protection PUT that is the heredoc terminator, not the `gh api` line — so it is not
+# enough on its own. STEP names the operation; `step` sets it and prints the same progress line
+# the script printed before.
+STEP="startup"
+step() {
+  STEP="$1"
+  echo "  $1..."
+}
+trap 'echo "" >&2
+      echo "!! ABORTED during: ${STEP} (near line ${LINENO})" >&2
+      echo "   ${REPO:-The repository} is PARTIALLY configured: writes before this point were" >&2
+      echo "   applied, later ones were not. Fix the cause and re-run — re-running is safe." >&2' ERR
+
 # Shared repository settings for calvindotsg projects.
 # Idempotent — safe to re-run. All commands use PUT/PATCH semantics, and the branch-protection
 # PUT reads the existing required status checks back before replacing the object, so a re-run
@@ -16,12 +37,27 @@ set -euo pipefail
 
 REPO="${1:?Usage: $0 OWNER/REPO}"
 
+# --- Manual-steps checklist ---
+# Printed from an EXIT trap so it appears on the failure path too. A partial run needs this
+# checklist more than a clean one does: the abort message above says what was skipped, this says
+# what was never automated in the first place. Registered after REPO is known so a usage error
+# does not print it.
+print_manual_steps() {
+  echo ""
+  echo "==> Manual steps remaining:"
+  echo "  1. Set homepage URL:  gh repo edit ${REPO} --homepage <url>"
+  echo "  2. Set topics:        gh repo edit ${REPO} --add-topic <topic>"
+  echo "  3. Set status checks: gh api --method PUT repos/${REPO}/branches/main/protection --input <payload>"
+  echo "  4. Sidebar (About gear icon): uncheck Deployments and Packages if not used"
+}
+trap print_manual_steps EXIT
+
 echo "==> Configuring ${REPO}"
 
 # --- Merge strategy ---
 # Squash-only keeps main history clean. PR title + description become the commit
 # message, which pairs well with conventional commits and release-please.
-echo "  Setting merge strategy (squash-only)..."
+step "Setting merge strategy (squash-only)"
 gh repo edit "${REPO}" \
   --enable-squash-merge \
   --enable-merge-commit=false \
@@ -33,7 +69,7 @@ gh repo edit "${REPO}" \
 # auto-merge: lets release-please PRs merge once CI passes without manual action.
 # allow-update-branch: shows "Update branch" button on PRs when behind main.
 # wiki/projects: unused — disable to reduce surface area.
-echo "  Setting repository features..."
+step "Setting repository features"
 gh repo edit "${REPO}" \
   --delete-branch-on-merge \
   --enable-auto-merge \
@@ -44,7 +80,7 @@ gh repo edit "${REPO}" \
 # --- Security ---
 # Dependabot alerts + security updates for dependency vulnerabilities.
 # Private vulnerability reporting so users can report issues without public disclosure.
-echo "  Enabling security features..."
+step "Enabling security features"
 gh api --method PUT "repos/${REPO}/vulnerability-alerts" --silent
 gh api --method PUT "repos/${REPO}/automated-security-fixes" --silent
 gh api --method PUT "repos/${REPO}/private-vulnerability-reporting" --silent
@@ -65,7 +101,7 @@ gh api --method PUT "repos/${REPO}/private-vulnerability-reporting" --silent
 #
 # This endpoint reports and replaces CLASSIC protection only. A branch protected by a ruleset is
 # invisible to it and is left untouched; see README.md for how to check both systems.
-echo "  Setting branch protection (preserving any status checks already set)..."
+step "Setting branch protection (preserving any status checks already set)"
 
 # PUT here is FULL REPLACEMENT, and required_status_checks is a REQUIRED field — it cannot be
 # omitted, and null means "disable" rather than "leave alone". Sending null therefore deletes the
@@ -161,13 +197,6 @@ else
   echo "  config:    no .github/dependabot.yml — version updates are not configured"
 fi
 
-echo ""
-echo "==> Done. Manual steps remaining:"
-echo "  1. Set homepage URL:  gh repo edit ${REPO} --homepage <url>"
-echo "  2. Set topics:        gh repo edit ${REPO} --add-topic <topic>"
-echo "  3. Set status checks: gh api --method PUT repos/${REPO}/branches/main/protection --input <payload>"
-echo "  4. Sidebar (About gear icon): uncheck Deployments and Packages if not used"
-
 # --- Template detection (optional nudge) ---
 # Same capture-on-success shape as the liveness lookups above: with the `||` inside, a failed
 # lookup would put gh's error body into TEMPLATE_SOURCE and the guard below would print it back
@@ -181,3 +210,7 @@ if [ -n "${TEMPLATE_SOURCE}" ]; then
   echo "    bash scripts/init.sh"
   echo "  to substitute placeholder values."
 fi
+
+# Reached only when every write above succeeded; the checklist follows from the EXIT trap.
+echo ""
+echo "==> Done. ${REPO} configured."
