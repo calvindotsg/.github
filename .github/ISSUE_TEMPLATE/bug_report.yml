@@ -13,8 +13,10 @@ body:
     id: version
     attributes:
       label: Version
-      description: Output of `<tool-name> --version`
-      placeholder: "e.g. 0.2.1"
+      description: >-
+        The project's version. Most of these projects print it with `--version`; if this one
+        does not, the commit SHA or release tag is just as good.
+      placeholder: "e.g. 0.2.1, or a commit SHA"
     validations:
       required: true
   - type: input
@@ -35,6 +37,9 @@ body:
     id: error
     attributes:
       label: Error output / screenshots
-      description: Paste any error messages or attach screenshots.
+      description: >-
+        Paste any error messages or attach screenshots. **Please redact secrets first** —
+        tokens, API keys, connection strings and private paths. Issues are public, and GitHub's
+        automatic secret scanning only recognises well-known provider token formats.
     validations:
       required: false

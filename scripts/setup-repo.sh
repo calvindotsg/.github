@@ -58,6 +58,8 @@ REPO="${1:?Usage: $0 OWNER/REPO}"
 # what was never automated in the first place. Registered after REPO is known so a usage error
 # does not print it.
 print_manual_steps() {
+  # Suppressed for a repo that was never eligible for configuration in the first place.
+  [ "${SKIP_CHECKLIST:-}" = "1" ] && return 0
   echo ""
   echo "==> Manual steps remaining:"
   echo "  1. Set homepage URL:  gh repo edit ${REPO} --homepage <url>"
@@ -68,6 +70,35 @@ print_manual_steps() {
 trap print_manual_steps EXIT
 
 echo "==> Configuring ${REPO}"
+
+# --- Repository shape ---
+# Read BEFORE any write. Three of the steps below apply only to some kinds of repository, and
+# discovering that by watching a PUT fail means stopping half-configured. Both values are
+# captured on success and validated, and an unreadable answer aborts: every branch after this
+# point depends on them, so guessing is the one thing that must not happen.
+step "Reading repository metadata"
+VISIBILITY=$(gh api "repos/${REPO}" --jq '.visibility' 2>/dev/null) || VISIBILITY=""
+case "${VISIBILITY}" in public|private|internal) ;; *) VISIBILITY="" ;; esac
+IS_ARCHIVED=$(gh api "repos/${REPO}" --jq '.archived' 2>/dev/null) || IS_ARCHIVED=""
+case "${IS_ARCHIVED}" in true|false) ;; *) IS_ARCHIVED="" ;; esac
+if [ -z "${VISIBILITY}" ] || [ -z "${IS_ARCHIVED}" ]; then
+  echo "" >&2
+  echo "!! Could not read whether ${REPO} is public or archived, so it is not knowable which" >&2
+  echo "   parts of the baseline apply. Nothing has been written. Re-run when the API answers." >&2
+  SKIP_CHECKLIST=1
+  exit 1
+fi
+echo "  visibility: ${VISIBILITY}, archived: ${IS_ARCHIVED}"
+
+# An archived repository is read-only: the very first `gh repo edit` below would fail against it.
+# Stop cleanly and say so, rather than aborting mid-run with a 403 that reads like a fault.
+if [ "${IS_ARCHIVED}" = "true" ]; then
+  echo ""
+  echo "==> ${REPO} is ARCHIVED, so GitHub holds it read-only and none of the baseline can be"
+  echo "    applied. This is expected, not a failure — unarchive it first if it should be live."
+  SKIP_CHECKLIST=1
+  exit 0
+fi
 
 # --- Merge strategy ---
 # Squash-only keeps main history clean. PR title + description become the commit
@@ -98,7 +129,56 @@ gh repo edit "${REPO}" \
 step "Enabling security features"
 gh api --method PUT "repos/${REPO}/vulnerability-alerts" --silent
 gh api --method PUT "repos/${REPO}/automated-security-fixes" --silent
-gh api --method PUT "repos/${REPO}/private-vulnerability-reporting" --silent
+
+# Private vulnerability reporting is offered on PUBLIC repositories only — the endpoint 404s on a
+# private repo and 422s on an archived one. Before this check the script aborted here on every
+# private repo, which meant branch protection below was never reached on most of the fleet.
+if [ "${VISIBILITY}" = "public" ]; then
+  gh api --method PUT "repos/${REPO}/private-vulnerability-reporting" --silent
+else
+  echo "  ·  ${VISIBILITY} repo — private vulnerability reporting is public-only, skipped."
+  echo "     SECURITY.md's email fallback is the reporting channel here."
+fi
+
+# --- Actions permissions ---
+# The GITHUB_TOKEN handed to a workflow that declares no `permissions:` block of its own.
+# `write` is GitHub's legacy default and grants contents, issues, pull-requests and packages
+# write to every such job — far more than anything here needs, and it is granted to third-party
+# actions running in that job too. `read` is the correct floor; a workflow that genuinely needs
+# more should say so in its own `permissions:` block, where it is reviewable.
+#
+# can_approve_pull_request_reviews=false stops Actions approving pull requests, which would
+# otherwise let a workflow satisfy a review requirement without a human.
+step "Restricting default workflow permissions"
+gh api --method PUT "repos/${REPO}/actions/permissions/workflow" \
+  --silent \
+  -F default_workflow_permissions=read \
+  -F can_approve_pull_request_reviews=false
+
+# --- Secret scanning ---
+# PUBLIC only, and not by preference: on a private repository both fields require GitHub Advanced
+# Security, and without it they are absent from the API response entirely rather than merely
+# disabled. Sending them there would fail the run for a feature the account cannot use.
+#
+# Scope worth knowing: push protection blocks PROVIDER patterns — tokens whose shape GitHub and
+# its partners publish. It does not cover private keys, connection strings or bespoke secrets;
+# `secret_scanning_non_provider_patterns` is what covers those, it is a paid feature, and it is
+# disabled across this fleet. Treat this as a partial control, not a guarantee.
+if [ "${VISIBILITY}" = "public" ]; then
+  step "Enabling secret scanning and push protection"
+  gh api --method PATCH "repos/${REPO}" \
+    --silent \
+    --input - <<'EOF'
+{
+  "security_and_analysis": {
+    "secret_scanning": { "status": "enabled" },
+    "secret_scanning_push_protection": { "status": "enabled" }
+  }
+}
+EOF
+else
+  echo "  ·  ${VISIBILITY} repo — secret scanning needs GitHub Advanced Security, skipped."
+fi
 
 # --- Branch protection ---
 # Require PRs (0 approvals — solo maintainer). On its own this does NOT enforce CI: with no
