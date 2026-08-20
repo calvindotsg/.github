@@ -8,24 +8,39 @@ set -euo pipefail
 # template with no first commit has no `main`, so the branch-protection call 404s. Private repos
 # hit the same shape earlier, at the public-only private-vulnerability-reporting PUT.
 #
+# This fires on a FAILED COMMAND only. Ctrl-C or SIGTERM still leaves a partial configuration
+# without this message; the EXIT trap's checklist is what prints then.
+#
 # ${LINENO} in an ERR trap reports the LAST line of a multi-line command — for the
-# branch-protection PUT that is the heredoc terminator, not the `gh api` line — so it is not
-# enough on its own. STEP names the operation; `step` sets it and prints the same progress line
-# the script printed before.
+# branch-protection PUT that is the heredoc terminator, not the `gh api` line — and it must be
+# captured on the FIRST line of the trap body, because bash 3.2 offsets it by the reference's own
+# position within that body and would otherwise report a blank line. It is a hint either way, so
+# STEP names the operation; `step` sets it and prints the same progress line as before.
 STEP="startup"
 step() {
   STEP="$1"
   echo "  $1..."
 }
-trap 'echo "" >&2
-      echo "!! ABORTED during: ${STEP} (near line ${LINENO})" >&2
-      echo "   ${REPO:-The repository} is PARTIALLY configured: writes before this point were" >&2
-      echo "   applied, later ones were not. Fix the cause and re-run — re-running is safe." >&2' ERR
+trap 'ABORT_LINE=${LINENO}
+      echo "" >&2
+      echo "!! ABORTED during: ${STEP} (near line ${ABORT_LINE})" >&2
+      echo "   ${REPO:-The repository} is PARTIALLY configured: writes before this point, if any," >&2
+      echo "   were applied, later ones were not. Re-running is safe once the cause is fixed." >&2
+      echo "   If this was the private-vulnerability-reporting step on a PRIVATE repo, it is not" >&2
+      echo "   fixable: that endpoint is public-only, so the run will stop here every time." >&2' ERR
 
 # Shared repository settings for calvindotsg projects.
 # Idempotent — safe to re-run. All commands use PUT/PATCH semantics, and the branch-protection
 # PUT reads the existing required status checks back before replacing the object, so a re-run
-# preserves them instead of clearing them.
+# keeps their names and the strict flag rather than clearing them.
+#
+# Two limits on that claim, both deliberate:
+#   - It preserves check NAMES, not the `checks` array's app_id bindings. GitHub re-derives those
+#     from which app recently reported each context, so they survive in practice but are not
+#     written explicitly. Sending `contexts` and `checks` together is undocumented, so this does
+#     not do it.
+#   - The PUT is full replacement, so every protection field the payload omits reverts to its
+#     documented default of false. See the list above the payload.
 #
 # Usage:
 #   ./setup-repo.sh OWNER/REPO
@@ -101,16 +116,53 @@ gh api --method PUT "repos/${REPO}/private-vulnerability-reporting" --silent
 #
 # This endpoint reports and replaces CLASSIC protection only. A branch protected by a ruleset is
 # invisible to it and is left untouched; see README.md for how to check both systems.
+#
+# FIELDS THIS PAYLOAD OMITS, and which the full-replacement PUT therefore forces to false:
+#   required_linear_history, block_creations, required_conversation_resolution, lock_branch,
+#   allow_fork_syncing, and the required_pull_request_reviews sub-flags dismiss_stale_reviews,
+#   require_code_owner_reviews, require_last_push_approval.
+# Every calvindotsg repo with classic protection already has all nine at false, so nothing is
+# lost today — but set them in the payload here before relying on any of them.
 step "Setting branch protection (preserving any status checks already set)"
 
 # PUT here is FULL REPLACEMENT, and required_status_checks is a REQUIRED field — it cannot be
 # omitted, and null means "disable" rather than "leave alone". Sending null therefore deletes the
 # contexts the note above tells the operator to add: the script would silently undo its own
 # documented follow-up step on every re-run. So read them back first and write them through.
-# A 404 is the ordinary case (no checks configured, or no protection at all yet) and yields null.
-EXISTING_CHECKS=$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" \
-  --jq '{strict, contexts}' 2>/dev/null) || EXISTING_CHECKS="null"
-[ -n "${EXISTING_CHECKS}" ] || EXISTING_CHECKS="null"
+#
+# READ THE HTTP STATUS, NOT THE EXIT STATUS. `gh api` exits non-zero for BOTH "no checks
+# configured" (404) and "the call failed", so `... || EXISTING_CHECKS="null"` would turn a 403
+# secondary rate limit into a confident "nothing to preserve" and PUT null — deleting the very
+# contexts this block exists to keep, while still printing "Done." Only 404 is safe to read as
+# absence; anything else means we do not know, and not knowing must abort rather than write.
+RSC_PATH="repos/${REPO}/branches/main/protection/required_status_checks"
+# The `|| true` is INSIDE the substitution here, which is the shape this script warns about
+# everywhere else. It is safe in this one place, and only because of both of these: `head -1`
+# bounds the capture to the status line, and the `case` below accepts nothing but an exact 200
+# or 404. Without it, `set -o pipefail` makes the whole assignment fail on the 404 that this
+# block specifically needs to handle as "no checks configured", and the run aborts instead.
+RSC_CODE=$(gh api "${RSC_PATH}" -i --silent 2>/dev/null | head -1 | awk '{print $2}' || true)
+case "${RSC_CODE}" in
+  200)
+    EXISTING_CHECKS=$(gh api "${RSC_PATH}" --jq '{strict, contexts}' 2>/dev/null) \
+      || EXISTING_CHECKS=""
+    ;;
+  404)
+    # No checks configured, or no protection at all yet. Nothing to preserve.
+    EXISTING_CHECKS="null"
+    ;;
+  *)
+    EXISTING_CHECKS=""
+    ;;
+esac
+if [ -z "${EXISTING_CHECKS}" ]; then
+  echo "" >&2
+  echo "!! Could not read the existing required status checks (HTTP ${RSC_CODE:-no response})." >&2
+  echo "   REFUSING to write branch protection: this PUT replaces the whole object, so writing" >&2
+  echo "   it now could delete status checks that are configured but unreadable right now." >&2
+  echo "   Everything before this step was applied. Re-run once the API is answering." >&2
+  exit 1
+fi
 
 # Heredoc below is UNQUOTED on purpose so ${EXISTING_CHECKS} expands. Nothing else in the payload
 # contains a $ or a backtick, so nothing else expands.
@@ -182,14 +234,17 @@ if gh api "repos/${REPO}/contents/.github/dependabot.yml" --silent >/dev/null 2>
     echo "     Settings > Advanced Security > Dependabot version updates"
   elif [ "${IS_ARCHIVED}" = "true" ]; then
     echo "  ·  Archived — nothing will open a pull request here. Expected, not a fault."
+  elif [ "${IS_FORK}" = "?" ] || [ "${IS_ARCHIVED}" = "?" ] || \
+       [ "${HAS_RUNS}" = "?" ] || [ "${PR_COUNT}" = "?" ]; then
+    # Must outrank the arm below it: with the metadata lookups failed, "0 runs and 0 PRs" is not
+    # evidence of anything, and diagnosing two confident causes from it is the failure this
+    # section exists to avoid.
+    echo "  ?  Could not determine liveness — an API lookup failed. Nothing below it is known."
+    echo "     Re-run before trusting this section."
   elif [ "${PR_COUNT}" = "0" ] && [ "${HAS_RUNS}" = "0" ]; then
     echo "  ⚠  No bot pull request has ever been opened and no update run is visible."
     echo "     Either the config is newer than its first interval, or it is not running."
     echo "     Confirm against a dependency whose newer release predates the last expected run."
-  elif [ "${IS_FORK}" = "?" ] || [ "${IS_ARCHIVED}" = "?" ] || \
-       [ "${HAS_RUNS}" = "?" ] || [ "${PR_COUNT}" = "?" ]; then
-    echo "  ?  Could not determine liveness — an API lookup failed. Nothing below it is known."
-    echo "     Re-run before trusting this section."
   else
     echo "  ✓  Has produced update activity."
   fi

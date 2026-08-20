@@ -63,19 +63,35 @@ say() {
   esac
 }
 
-# 1. Classic branch protection.
-say "classic protection" "$(code "repos/${REPO}/branches/main/protection")"
+# 0. Can this token see the repo at all? Without this gate every 404 below is ambiguous
+#    between "the setting is off" and "wrong name, or wrong `gh` account" — and a typo would
+#    otherwise be reported as a confident set of "no"s about a repo never reached.
+if [ "$(code "repos/${REPO}")" != "200" ]; then
+  echo "cannot read ${REPO} — check the name and 'gh auth status'"
+else
 
-# 2. Rulesets. Step 1 does not report these, and this does not report classic protection.
-RULES=$(gh api "repos/${REPO}/rules/branches/main" --jq '[.[].type]' 2>/dev/null) \
-  || RULES="UNKNOWN — lookup failed"
-echo "rulesets: ${RULES}"
+  # 1. Classic branch protection.
+  say "classic protection" "$(code "repos/${REPO}/branches/main/protection")"
 
-# 3. The security half of the baseline — branch protection implies none of it.
-say "dependabot alerts" "$(code "repos/${REPO}/vulnerability-alerts")"
-PVR=$(gh api "repos/${REPO}/private-vulnerability-reporting" --jq '.enabled' 2>/dev/null) \
-  || PVR="UNKNOWN — endpoint is public-and-not-archived only"
-echo "private vulnerability reporting: ${PVR}"
+  # 2. Rulesets. Step 1 does not report these, and this does not report classic protection.
+  #    Note it lists only ACTIVE rulesets, so an empty list is not proof none exist.
+  if [ "$(code "repos/${REPO}/rules/branches/main")" = "200" ]; then
+    echo "rulesets: $(gh api "repos/${REPO}/rules/branches/main" --jq '[.[].type]')"
+  else
+    echo "rulesets: UNKNOWN — lookup failed"
+  fi
+
+  # 3. The security half of the baseline — branch protection implies none of it.
+  say "dependabot alerts" "$(code "repos/${REPO}/vulnerability-alerts")"
+
+  # PVR needs the body, not just the status: a 200 can still say enabled=false. A 422 is the
+  # documented "must be public and not archived", which is a fact about the repo, not a failure.
+  case "$(code "repos/${REPO}/private-vulnerability-reporting")" in
+    200) echo "private vuln reporting: $(gh api "repos/${REPO}/private-vulnerability-reporting" --jq '.enabled')" ;;
+    422) echo "private vuln reporting: n/a — repo is private or archived" ;;
+    *)   echo "private vuln reporting: UNKNOWN" ;;
+  esac
+fi
 ```
 
 `main` is protected if step 1 says `yes` **or** step 2 returns a non-empty list.
