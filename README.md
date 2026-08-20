@@ -27,8 +27,20 @@ Files in this repository are automatically inherited by all `calvindotsg` repos 
 - Auto-delete branches on merge, auto-merge enabled
 - Wiki and Projects disabled
 - Dependabot alerts and security updates
+- Default workflow permissions set to `read`, and Actions barred from approving pull requests
+- Branch protection (PRs required, enforce admins, no force push) — status check names are set separately, since they vary per CI matrix, and any already configured are preserved on re-run
+
+Public repositories only, because GitHub offers these nowhere else:
+
 - Private vulnerability reporting
-- Branch protection (PRs required, enforce admins, no force push) — status check names are set separately, since they vary per CI matrix
+- Secret scanning and push protection. Note this covers *provider* patterns — tokens whose shape
+  GitHub and its partners publish. Private keys, connection strings and bespoke secrets need
+  `secret_scanning_non_provider_patterns`, which is a paid feature and is off across this account.
+
+The script reads the repository's visibility and archived state before writing anything. An
+archived repo is read-only, so it stops and says so instead of failing on the first write; a
+private repo has the two public-only steps skipped rather than aborting on them. If that metadata
+cannot be read at all, it writes nothing.
 
 It also **reports** — writing nothing — on whether Dependabot *version* updates are actually
 live. That one is a report rather than a setting because GitHub gives it no API: alerts and

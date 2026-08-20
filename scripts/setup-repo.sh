@@ -140,6 +140,46 @@ else
   echo "     SECURITY.md's email fallback is the reporting channel here."
 fi
 
+# --- Actions permissions ---
+# The GITHUB_TOKEN handed to a workflow that declares no `permissions:` block of its own.
+# `write` is GitHub's legacy default and grants contents, issues, pull-requests and packages
+# write to every such job — far more than anything here needs, and it is granted to third-party
+# actions running in that job too. `read` is the correct floor; a workflow that genuinely needs
+# more should say so in its own `permissions:` block, where it is reviewable.
+#
+# can_approve_pull_request_reviews=false stops Actions approving pull requests, which would
+# otherwise let a workflow satisfy a review requirement without a human.
+step "Restricting default workflow permissions"
+gh api --method PUT "repos/${REPO}/actions/permissions/workflow" \
+  --silent \
+  -F default_workflow_permissions=read \
+  -F can_approve_pull_request_reviews=false
+
+# --- Secret scanning ---
+# PUBLIC only, and not by preference: on a private repository both fields require GitHub Advanced
+# Security, and without it they are absent from the API response entirely rather than merely
+# disabled. Sending them there would fail the run for a feature the account cannot use.
+#
+# Scope worth knowing: push protection blocks PROVIDER patterns — tokens whose shape GitHub and
+# its partners publish. It does not cover private keys, connection strings or bespoke secrets;
+# `secret_scanning_non_provider_patterns` is what covers those, it is a paid feature, and it is
+# disabled across this fleet. Treat this as a partial control, not a guarantee.
+if [ "${VISIBILITY}" = "public" ]; then
+  step "Enabling secret scanning and push protection"
+  gh api --method PATCH "repos/${REPO}" \
+    --silent \
+    --input - <<'EOF'
+{
+  "security_and_analysis": {
+    "secret_scanning": { "status": "enabled" },
+    "secret_scanning_push_protection": { "status": "enabled" }
+  }
+}
+EOF
+else
+  echo "  ·  ${VISIBILITY} repo — secret scanning needs GitHub Advanced Security, skipped."
+fi
+
 # --- Branch protection ---
 # Require PRs (0 approvals — solo maintainer). On its own this does NOT enforce CI: with no
 # contexts in the payload there is nothing to gate on, which is why any that already exist are
