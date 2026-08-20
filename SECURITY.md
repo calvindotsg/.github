@@ -12,6 +12,11 @@ Only the latest minor release is supported with security updates.
 2. Click **"Report a vulnerability"**
 3. Fill out the advisory form
 
+**If the Security tab shows no "Report a vulnerability" button** — which is the case on private
+repositories, where GitHub does not offer the feature, and on any public repository where it has
+not been enabled — email <security@calvin.sg> instead. Please do not open a public issue for a
+security report.
+
 You will receive an acknowledgment within **7 days**. We will work with you to understand the issue and coordinate a fix before any public disclosure.
 
 ## Scope

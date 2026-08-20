@@ -8,7 +8,7 @@ Files in this repository are automatically inherited by all `calvindotsg` repos 
 
 | File | Purpose |
 |------|---------|
-| `SECURITY.md` | Security policy — report via GitHub Private Vulnerability Reporting |
+| `SECURITY.md` | Security policy — report via GitHub Private Vulnerability Reporting, or email where that is unavailable |
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR checklist — conventional commits, tests, linter |
 | `.github/ISSUE_TEMPLATE/bug_report.yml` | Generic bug report form |
 | `.github/ISSUE_TEMPLATE/feature_request.yml` | Generic feature request form |
