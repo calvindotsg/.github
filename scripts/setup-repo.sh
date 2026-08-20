@@ -2,7 +2,9 @@
 set -euo pipefail
 
 # Shared repository settings for calvindotsg projects.
-# Idempotent — safe to re-run. All commands use PUT/PATCH semantics.
+# Idempotent — safe to re-run. All commands use PUT/PATCH semantics, and the branch-protection
+# PUT reads the existing required status checks back before replacing the object, so a re-run
+# preserves them instead of clearing them.
 #
 # Usage:
 #   ./setup-repo.sh OWNER/REPO
@@ -48,7 +50,9 @@ gh api --method PUT "repos/${REPO}/automated-security-fixes" --silent
 gh api --method PUT "repos/${REPO}/private-vulnerability-reporting" --silent
 
 # --- Branch protection ---
-# Require PRs (0 approvals — solo maintainer, but enforces CI before merge).
+# Require PRs (0 approvals — solo maintainer). On its own this does NOT enforce CI: with no
+# contexts in the payload there is nothing to gate on, which is why any that already exist are
+# read back and written straight through rather than overwritten.
 # Enforce admins so the maintainer can't bypass accidentally.
 # No force pushes or deletions on main.
 #
@@ -57,12 +61,28 @@ gh api --method PUT "repos/${REPO}/private-vulnerability-reporting" --silent
 # Set them separately:
 #   gh api --method PUT repos/OWNER/REPO/branches/main/protection \
 #     --input <payload-with-contexts>
-echo "  Setting branch protection (without status checks)..."
+# Once set, re-running this script keeps them — see the read-back below.
+#
+# This endpoint reports and replaces CLASSIC protection only. A branch protected by a ruleset is
+# invisible to it and is left untouched; see README.md for how to check both systems.
+echo "  Setting branch protection (preserving any status checks already set)..."
+
+# PUT here is FULL REPLACEMENT, and required_status_checks is a REQUIRED field — it cannot be
+# omitted, and null means "disable" rather than "leave alone". Sending null therefore deletes the
+# contexts the note above tells the operator to add: the script would silently undo its own
+# documented follow-up step on every re-run. So read them back first and write them through.
+# A 404 is the ordinary case (no checks configured, or no protection at all yet) and yields null.
+EXISTING_CHECKS=$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" \
+  --jq '{strict, contexts}' 2>/dev/null) || EXISTING_CHECKS="null"
+[ -n "${EXISTING_CHECKS}" ] || EXISTING_CHECKS="null"
+
+# Heredoc below is UNQUOTED on purpose so ${EXISTING_CHECKS} expands. Nothing else in the payload
+# contains a $ or a backtick, so nothing else expands.
 gh api --method PUT "repos/${REPO}/branches/main/protection" \
   --silent \
-  --input - <<'EOF'
+  --input - <<EOF
 {
-  "required_status_checks": null,
+  "required_status_checks": ${EXISTING_CHECKS},
   "enforce_admins": true,
   "required_pull_request_reviews": {
     "required_approving_review_count": 0
