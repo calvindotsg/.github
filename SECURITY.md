@@ -20,6 +20,9 @@ repositories, where GitHub does not offer the feature, and on any public reposit
 not been enabled — email <security@calvin.sg> instead. Please do not open a public issue for a
 security report.
 
+Machine-readable contact details for the website are published at
+<https://calvin.sg/.well-known/security.txt>.
+
 These are personal projects maintained by one person, so treat response time as best-effort
 rather than a guarantee: the aim is to acknowledge within **7 days**. Reports are worked through
 with the reporter and a fix coordinated before any public disclosure.
