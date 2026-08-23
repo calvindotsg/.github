@@ -46,6 +46,54 @@ been decoration is carrying information instead.
 That leaves the install command as the clearest single win, and `repos.json` is where the three
 that have one keep it. It is optional: a repository with no entry still gets a card.
 
+## The language bar is only as truthful as each repo's `.gitattributes`
+
+The bar states a fact about a repository, so it is worth knowing where that fact comes from and
+how it goes wrong. GitHub computes it with [linguist][linguist], which counts bytes of tracked
+files on the **default branch** and, by default, counts only languages whose type in
+`languages.yml` is `programming` or `markup`. Everything else — `prose` and `data` — is
+invisible. `.gitattributes` is the documented way to correct that, per
+[linguist's overrides doc][overrides]:
+
+| Attribute | Effect |
+|---|---|
+| `linguist-detectable` | Count a `prose`/`data` language that is normally ignored, or stop counting one |
+| `linguist-documentation` | Exclude — docs |
+| `linguist-generated` | Exclude — build output, and hide from diffs |
+| `linguist-vendored` | Exclude — code you did not write |
+| `linguist-language=NAME` | Reclassify |
+
+All six repositories were audited against this. **No vendored, generated or documentation files
+are being miscounted anywhere** — nothing commits build output, and every repository's markdown
+is already correctly excluded as prose. One defect was real:
+
+**`prose` invisibility on a repository whose product is prose.** This repository's markdown —
+`SECURITY.md`, the pull-request template, the issue forms — is exactly what the other
+repositories inherit, and it counted for nothing. Adding `social-preview/card.html` would have
+made that worse, reporting a community-health repository as Shell 68% / HTML 32% with the
+markdown still invisible. `.gitattributes` here now carries `*.md linguist-detectable`, giving
+Shell 52% / HTML 24% / Markdown 24%.
+
+**It is a per-repository judgement, not a setting to standardise.** Two repositories that look
+like the same case are not:
+
+- **`portfolio-v2`** — the same line would let roughly a megabyte of `plans/` outweigh the site's
+  own source. Deliberately not applied. Its numbers are already correct: TypeScript genuinely
+  dominates, though note ~83% of that TypeScript is the test suite, which linguist counts as
+  source by design.
+- **`calvindotsg`** (the profile README) — the same line would report `Markdown 100%` off a 2 KB
+  README. Deliberately not applied either, for the opposite reason: it is *accurate* and tells a
+  reader nothing, and it would trade the one card in the set that legitimately wears the brand
+  accent for linguist's Markdown blue. One line in that repository if this is ever wanted.
+
+**A merge that changes the language mix invalidates the committed cards.** Linguist reads the
+default branch, so this repository's own card still shows `Shell` alone until this branch lands
+and GitHub re-indexes. Re-run the script for any repository whose languages have moved — there
+is no notification, and the card will keep asserting the old numbers indefinitely.
+
+[linguist]: https://github.com/github-linguist/linguist
+[overrides]: https://github.com/github-linguist/linguist/blob/main/docs/overrides.md
+
 ## Status: nothing is uploaded — GitHub cannot serve it
 
 **GitHub's repository-image pipeline is broken as of 2026-08-21.** An upload succeeds, the
