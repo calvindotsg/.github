@@ -281,6 +281,9 @@
     }
 
     .facts .sep { color: var(--dim); }
+    /* Topics are already --dim, so the divider steps down by opacity rather than by another
+     * token — keeping the same "divider is quieter than what it divides" rule as .facts. */
+    .topics .sep { opacity: 0.55; }
 
     .lang-name { display: flex; align-items: center; gap: 11px; }
 
@@ -487,6 +490,9 @@
      * hanging off the end of it. Collapse to a single left-aligned group instead. */
     if (facts.length === 0) {
         document.querySelector(".meta").style.justifyContent = "flex-start";
+        /* Left-aligning is not enough: the empty div is still a flex item, so .meta's 32px
+         * gap survives it and indents the topics off the rule they sit under. */
+        $("facts").style.display = "none";
     }
 
     /*
@@ -499,7 +505,7 @@
     const topics = (CARD.topics || []).slice(0, 5);
     const paint = (n) => {
         topicsEl.innerHTML = topics.slice(0, n)
-            .map(esc).join('<span style="color:#3F3F3F"> · </span>');
+            .map(esc).join('<span class="sep"> · </span>');
     };
     paint(topics.length);
     for (let n = topics.length; n > 0 && topicsEl.scrollWidth > 520; n--) paint(n - 1);
