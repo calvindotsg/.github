@@ -25,6 +25,9 @@ set -euo pipefail
 #   --render-only        Draw the card and stop. Nothing is uploaded and nothing is verified.
 #   --remove             Delete the repository's uploaded card, restoring GitHub's generated
 #                        default. The escape hatch for a card that is set but not being served.
+#   --force              Upload without requiring the card to actually be served, and without
+#                        reverting when it is not. Read the refusal it overrides first.
+#   --serve-timeout N    Seconds to wait for GitHub to publish an uploaded card (default 120).
 #   --theme light|dark   Which of calvin.sg's two themes to draw. Default light — see the note
 #                        at the top of card.html for why a static card has to pick one.
 #   --images-dir DIR     Where the PNG lands (default: social-preview/images).
@@ -42,7 +45,9 @@ IMAGES_DIR="${ROOT_DIR}/social-preview/images"
 OVERRIDES="${ROOT_DIR}/social-preview/repos.json"
 RENDER_ONLY=0
 REMOVE=0
+FORCE=0
 THEME="light"
+SERVE_TIMEOUT=120
 KEEP_SURFACES=0
 REPOS=()
 
@@ -64,10 +69,15 @@ step() { STEP="$1"; printf '  %s...\n' "$1"; }
 say() { printf '%s\n' "$*"; }
 die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
 
-trap 'ABORT_LINE=${LINENO}
-      printf "\n!! ABORTED during: %s (near line %s)\n" "${STEP}" "${ABORT_LINE}" >&2
-      printf "   Repositories processed before this point were configured; later ones were not.\n" >&2
-      printf "   Re-running is safe: every step is a full replacement, not an append.\n" >&2' ERR
+# ${LINENO} in an ERR trap reports the LAST line of a multi-line command, so it is a hint rather
+# than a location. Held in a function so the trap string stays a single-quoted literal — and so
+# it can be re-armed by name after the one place that deliberately disarms it.
+on_err() {
+  printf '\n!! ABORTED during: %s (near line %s)\n' "${STEP}" "$1" >&2
+  printf '   Repositories processed before this point were configured; later ones were not.\n' >&2
+  printf '   Re-running is safe: every step is a full replacement, not an append.\n' >&2
+}
+trap 'on_err ${LINENO}' ERR
 
 cleanup() {
   [ -n "${WORK_DIR}" ] && [ -d "${WORK_DIR}" ] && rm -rf "${WORK_DIR}"
@@ -84,7 +94,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --render-only)   RENDER_ONLY=1; shift ;;
     --remove)        REMOVE=1; shift ;;
+    --force)         FORCE=1; shift ;;
     --theme)         THEME="${2:?--theme needs light or dark}"; shift 2 ;;
+    --serve-timeout) SERVE_TIMEOUT="${2:?--serve-timeout needs seconds}"; shift 2 ;;
     --keep-surfaces) KEEP_SURFACES=1; shift ;;
     --images-dir)    IMAGES_DIR="${2:?--images-dir needs a path}"; shift 2 ;;
     --template)      TEMPLATE="${2:?--template needs a path}"; shift 2 ;;
@@ -407,24 +419,39 @@ remove_card() {
 # publishing the bytes behind it. The first is this script's doing and is a hard gate. The second
 # is a GitHub-side job on its own clock.
 verify_card() {
-  local owner="$1" name="$2" og cdn
-  og="$(curl -sS "https://github.com/${owner}/${name}" \
+  local owner="$1" name="$2" og code waited=0
+  og="$(curl -sS "https://github.com/${owner}/${name}" 2>/dev/null \
         | grep -oE 'https://repository-images\.githubusercontent\.com/[^"]+' | head -1 || true)"
   if [ -z "${og}" ]; then
     say "     og:image is still GitHub's generated default — the upload did not take"
     return 1
   fi
-  cdn="$(curl -sS -o /dev/null -w '%{http_code}' "${og}")"
-  if [ "${cdn}" = "200" ]; then
-    say "     set and serving: ${og}"
-  else
-    say "     set: ${og}"
-    say "     serving: not yet (CDN returned ${cdn}) — GitHub publishes the bytes on its own schedule"
-  fi
-  return 0
+  say "     set: ${og}"
+
+  # POLL UNTIL THE BYTES ARE ACTUALLY SERVED, because every status code up to this point lies.
+  # The policy returns 201, storage 204, the finalize 200, GitHub repoints og:image and renders
+  # the preview tile in its own Settings page — and the asset can still 404 forever on the CDN.
+  # That was the whole of the 2026-08-21 outage, and nothing the script sends can detect it.
+  #
+  # A preflight against somebody else's card was tried first and is WRONG: every well-known
+  # repository's preview was uploaded before the outage and keeps serving throughout it, so the
+  # probe reports healthy exactly when it matters. The only honest test of "can GitHub publish a
+  # new image" is to publish one and look.
+  while [ "${waited}" -lt "${SERVE_TIMEOUT}" ]; do
+    code="$(curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "${og}" 2>/dev/null || echo 000)"
+    if [ "${code}" = "200" ]; then
+      say "     serving after ${waited}s"
+      return 0
+    fi
+    sleep 10
+    waited=$((waited + 10))
+  done
+
+  say "     NOT serving after ${SERVE_TIMEOUT}s (CDN returns ${code})"
+  return 2
 }
 
-# --- Main --------------------------------------------------------------------------------------
+# --- Main ---# --- Main --------------------------------------------------------------------------------------
 say "==> Social preview: ${#REPOS[@]} repository(ies)"
 
 step "Opening a browser pane to render in"
@@ -499,7 +526,29 @@ for full in "${REPOS[@]}"; do
   fi
 
   step "Verifying"
-  verify_card "${owner}" "${name}" || FAILED=$((FAILED + 1))
+  # A non-serving card is a HANDLED outcome, not an abort: silence the ERR trap across it so the
+  # run does not print the generic "ABORTED" banner on top of the specific explanation below.
+  trap - ERR
+  set +e
+  verify_card "${owner}" "${name}"
+  verdict=$?
+  set -e
+
+  if [ "${verdict}" -eq 2 ] && [ "${FORCE}" -eq 0 ]; then
+    # The card is set and unservable, which is worse than the generated card it replaced. Put
+    # that repository back before touching any of the others: the first repository in the run is
+    # the canary, and one broken card is a bug where six is an outage of your own making.
+    say "     reverting, and stopping before the remaining repositories"
+    remove_card "${owner}" "${name}" >/dev/null 2>&1 || true
+    printf '\n!! GitHub accepted the upload but is not publishing it.\n' >&2
+    printf '   %s/%s has been put back on GitHub'"'"'s generated card.\n' "${owner}" "${name}" >&2
+    printf '   This is the known pipeline outage — see social-preview/README.md. If the pipeline\n' >&2
+    printf '   is merely slow, raise the bound with --serve-timeout <seconds> and re-run.\n' >&2
+    printf '   --force uploads without this check and without reverting.\n' >&2
+    exit 1
+  fi
+  [ "${verdict}" -eq 0 ] || FAILED=$((FAILED + 1))
+  trap 'on_err ${LINENO}' ERR
 done
 
 say ""
