@@ -26,6 +26,6 @@
     "install": "npx granola-to-minutes export"
   },
   "calvindotsg/homebrew-tap": {
-    "install": "brew tap calvindotsg/tap"
+    "install": "brew tap calvindotsg/tap && brew trust --tap calvindotsg/tap"
   }
 }
