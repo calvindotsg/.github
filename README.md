@@ -114,6 +114,37 @@ fi
 - The reverse also holds: `cc-menubar` returns 200 with three required checks. Branch protection
   is not a proxy for the security settings, so step 3 is not optional.
 
+## Social Preview Cards
+
+`social-preview/` holds a card template and `scripts/social-preview.sh`, which draws a
+repository's social preview and uploads it. GitHub has no API for that setting — description,
+homepage and topics are all writable over REST, and the one field deciding what a link looks like
+in Slack or on LinkedIn is not — so the script drives the Settings page's own upload requests
+from a signed-in browser pane.
+
+```bash
+./scripts/social-preview.sh --render-only calvindotsg/mac-upkeep   # draw it, change nothing
+./scripts/social-preview.sh calvindotsg/mac-upkeep                 # draw, upload, verify
+./scripts/social-preview.sh --remove calvindotsg/mac-upkeep        # back to GitHub's default
+```
+
+All six public repositories get a card. GitHub's generated card carries four live counters —
+contributors, issues, stars, forks — which is the usual reason not to replace it; across these
+repositories those counters total 5 stars, 1 fork and 0 issues, and four of six read zero
+throughout, so a quarter of the generated card is an empty scoreboard. The card here keeps what
+was worth keeping (avatar, and the proportional language bar, reused as the divider between prose
+and metadata), drops the empty counters, and adds a licence, topics and — for the three
+repositories that have one — an **install command**, which no generated card can ever show.
+`repos.json` holds those commands and any per-repository theme override.
+
+**Nothing is uploaded yet.** GitHub's repository-image pipeline has been broken since 2026-08-21:
+the upload succeeds and `og:image` is repointed, but the bytes never reach the CDN, so a
+configured repository unfurls as a *broken* image. Verified across four uploads on `portfolio-v2`
+and reverted. See [social-preview/README.md](social-preview/README.md) for the comparison that
+sets the bar, the upload protocol, and how to check whether GitHub has fixed it.
+
+Requires macOS with cmux running, since the upload needs a real authenticated browser session.
+
 ## Related
 
 - **Template repos** (private): scaffold new projects with boilerplate code

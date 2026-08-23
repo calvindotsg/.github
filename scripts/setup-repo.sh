@@ -72,6 +72,9 @@ print_manual_steps() {
   echo "  2. Set topics:        gh repo edit ${REPO} --add-topic <topic>"
   echo "  3. Set status checks: gh api --method PUT repos/${REPO}/branches/main/protection --input <payload>"
   echo "  4. Sidebar (About gear icon): uncheck Deployments and Packages if not used"
+  echo "  5. Social preview:    ./scripts/social-preview.sh ${REPO}"
+  echo "     (GitHub has no API for it. See social-preview/README.md — and check the note there"
+  echo "      on GitHub not serving uploaded cards before running it.)"
 }
 trap print_manual_steps EXIT
 

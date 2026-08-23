@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Per-repository additions to the card. Optional: a repository absent from this file still",
+    "gets a card, drawn entirely from its GitHub metadata.",
+    "",
+    "install — the one thing no generated card can ever show, because GitHub has nowhere to keep",
+    "  it. For something you install and run it is the most useful line on the card. Every command",
+    "  here is copied from that repository's own README and is the first one a reader is given;",
+    "  re-check it when the README changes, because nothing else will.",
+    "",
+    "theme  — light or dark, overriding the run default. LIGHT IS THE DEFAULT AND NOTHING",
+    "  CURRENTLY OVERRIDES IT. The mechanism exists because calvin.sg genuinely has two themes,",
+    "  but a card is a static PNG and has to pick one, and light wins on two counts that are",
+    "  about the card rather than about taste: it carries the brand's real ink (primary-600",
+    "  #A82334, which the site only uses in Latte — the dark theme's #F3A3AA is an accommodation",
+    "  for a dark ground), and it makes the install chip the single dark element on the card, so",
+    "  the one line meant to be copied is the one that pulls the eye. On a dark card that chip",
+    "  disappears into its background. Reach for dark when a specific repository has a reason",
+    "  visible on the card, not a mood — and render both before deciding."
+  ],
+
+  "calvindotsg/mac-upkeep": {
+    "install": "brew install calvindotsg/tap/mac-upkeep"
+  },
+  "calvindotsg/granola-to-minutes": {
+    "install": "npx granola-to-minutes export"
+  },
+  "calvindotsg/homebrew-tap": {
+    "install": "brew tap calvindotsg/tap"
+  }
+}
