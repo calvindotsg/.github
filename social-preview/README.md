@@ -46,13 +46,12 @@ been decoration is carrying information instead.
 That leaves the install command as the clearest single win, and `repos.json` is where the three
 that have one keep it. It is optional: a repository with no entry still gets a card.
 
-## The language bar is only as truthful as each repo's `.gitattributes`
+## The language bar is only as truthful as linguist's defaults
 
-The bar states a fact about a repository, so it is worth knowing where that fact comes from and
-how it goes wrong. GitHub computes it with [linguist][linguist], which counts bytes of tracked
-files on the **default branch** and, by default, counts only languages whose type in
-`languages.yml` is `programming` or `markup`. Everything else — `prose` and `data` — is
-invisible. `.gitattributes` is the documented way to correct that, per
+The bar states a fact about a repository, so it is worth knowing where that fact comes from.
+GitHub computes it with [linguist][linguist], which counts bytes of tracked files on the
+**default branch**, and by default counts only languages whose type in `languages.yml` is
+`programming` or `markup`. `.gitattributes` can override that, per
 [linguist's overrides doc][overrides]:
 
 | Attribute | Effect |
@@ -63,33 +62,38 @@ invisible. `.gitattributes` is the documented way to correct that, per
 | `linguist-vendored` | Exclude — code you did not write |
 | `linguist-language=NAME` | Reclassify |
 
-All six repositories were audited against this. **No vendored, generated or documentation files
-are being miscounted anywhere** — nothing commits build output, and every repository's markdown
-is already correctly excluded as prose. One defect was real:
+All six repositories were audited against this. **Nothing needed overriding.** No repository
+commits build output, nothing is vendored that should not be, and every repository's prose is
+already correctly excluded.
 
-**`prose` invisibility on a repository whose product is prose.** This repository's markdown —
-`SECURITY.md`, the pull-request template, the issue forms — is exactly what the other
-repositories inherit, and it counted for nothing. Adding `social-preview/card.html` would have
-made that worse, reporting a community-health repository as Shell 68% / HTML 32% with the
-markdown still invisible. `.gitattributes` here now carries `*.md linguist-detectable`, giving
-Shell 52% / HTML 24% / Markdown 24%.
+**Two exclusions are worth knowing because they are not obvious**, and between them they sank a
+change this branch originally carried:
 
-**It is a per-repository judgement, not a setting to standardise.** Two repositories that look
-like the same case are not:
+- `vendor.yml` matches `(^|/)\.github/` — **everything under a `.github/` directory is vendored**
+  and cannot be counted, whatever `.gitattributes` says about it.
+- `documentation.yml` matches `(^|/)README(\.|$)` — every README is documentation, at any depth.
 
-- **`portfolio-v2`** — the same line would let roughly a megabyte of `plans/` outweigh the site's
-  own source. Deliberately not applied. Its numbers are already correct: TypeScript genuinely
-  dominates, though note ~83% of that TypeScript is the test suite, which linguist counts as
-  source by design.
-- **`calvindotsg`** (the profile README) — the same line would report `Markdown 100%` off a 2 KB
-  README. Deliberately not applied either, for the opposite reason: it is *accurate* and tells a
-  reader nothing, and it would trade the one card in the set that legitimately wears the brand
-  accent for linguist's Markdown blue. One line in that repository if this is ever wanted.
+This repository briefly carried `*.md linguist-detectable`, on the reasoning that its
+community-health markdown is what the other repositories inherit and so ought to count. The
+reasoning was wrong twice over. The pull-request template lives under `.github/` and is vendored,
+both READMEs are documentation, so the attribute reached only `SECURITY.md` — and by bytes the
+repository really is two large commented shell scripts (52 KB) plus a card template (22 KB)
+against 2.5 KB of health files. Markdown lands at 2.9%, or 3.3% even if `.github/**` were
+un-vendored as well. "Markdown is what this repository ships" is true of its purpose and false
+of its bytes, and linguist measures bytes. The override was removed.
+
+Two repositories that look like candidates and are not, for the record:
+
+- **`portfolio-v2`** — making markdown detectable would let roughly a megabyte of `plans/`
+  outweigh the site's own source. Its numbers are already right, though note that ~83% of the
+  reported TypeScript is the test suite, which linguist counts as source by design.
+- **`calvindotsg`** (the profile README) — would report an accurate and useless `Markdown 100%`
+  off a 2 KB README, and would cost the one card in the set that legitimately wears the brand
+  accent.
 
 **A merge that changes the language mix invalidates the committed cards.** Linguist reads the
-default branch, so this repository's own card still shows `Shell` alone until this branch lands
-and GitHub re-indexes. Re-run the script for any repository whose languages have moved — there
-is no notification, and the card will keep asserting the old numbers indefinitely.
+default branch, and there is no notification: re-run the script for any repository whose
+languages have moved, or the card will keep asserting the old numbers indefinitely.
 
 [linguist]: https://github.com/github-linguist/linguist
 [overrides]: https://github.com/github-linguist/linguist/blob/main/docs/overrides.md
@@ -111,7 +115,7 @@ from GitHub's own S3 bucket, and the CDN URL 404 for over 45 minutes. `--remove`
 generated card back.
 
 **To roll out once GitHub fixes it**, confirm on one repository that the script prints
-`set and serving` rather than `serving: not yet`, then:
+`serving after Ns` rather than `NOT serving after Ns`, then:
 
 ```bash
 ./scripts/social-preview.sh \
@@ -124,11 +128,12 @@ generated card back.
 One template, `card.html`, filled per repository. Every value except the install command is read
 from the repository at render time. Nothing re-runs this script on its own, so a committed card
 is a **snapshot**: a star arriving or a description being edited leaves it stale until someone
-runs it again. That is the cost the eligibility rule above is paying for.
+runs it again, and a merge that shifts a repository's languages is the most likely
+reason it needs re-running.
 
 | | |
 |---|---|
-| **Palette** | calvin.sg's dark theme, token for token — `#111111` canvas, `#171717` card, `#2C2C2C` rule, `#FAFAFA` ink, `#F3A3AA` accent. Not a second brand to maintain. |
+| **Palette** | calvin.sg's, token for token, and both of its themes ship. Light is the default — `#FAFAFA` canvas, `#F5F5F5` card, `#E5E5E5` rule, `#0B0B0B` ink, `#A82334` accent. `--theme dark` gives the Mocha set. Not a second brand to maintain. |
 | **Type** | SF Pro for prose. FiraCode for the handle, language, licence and topics — every repository here is something you install and run from a shell, so the machine-readable half of the card is set in the font that account's terminal uses. |
 | **Signature** | The offset slab behind the card, inherited from the portrait treatment on calvin.sg — and coloured by the repository's **primary language**, not by the brand. The same element that makes the account's cards one set tells them apart before a word is read. The dot beside the language name is the legend. |
 | **Install line** | The one element the generated card cannot have. Set as a terminal line — recessed, monospaced, with the prompt in the language colour — because that is where the command will be typed. |
@@ -138,12 +143,17 @@ Language colours come from `primaryLanguage.color` on GitHub's GraphQL API, whic
 linguist's own value. No copy of that table is kept here. A repository with no language — a
 profile README — falls back to the brand accent, which is the honest answer for one.
 
-Linguist's palette was picked for a 12px dot on a white list, and some of it disappears on a
-near-black canvas: Ruby's `#701516` sits at 0.02 relative luminance. The slab lifts a colour
-toward white only until it clears a low floor, so dark red stays dark red. Lifting every language
-to a common luminance would read more evenly and destroy the point — Ruby lifted that far lands
-within a few points of the brand pink, so the tap and the profile README would wear the same
-colour for opposite reasons.
+Linguist's palette was picked for a 12px dot on a repository list, not for a 1200px slab, and at
+this size some of it disappears — but *which* entries disappear flips with the theme. Measured:
+Ruby `#701516` is 1.63:1 against the dark canvas and 11.13:1 against the light one; Shell
+`#89e051` is the exact mirror, 11.55:1 on dark and 1.57:1 on light. So the slab steps its colour
+*away from the canvas* — toward black on a light ground, toward white on a dark one — until it
+clears a low contrast floor. Only the colours that need it move: on the light default, Shell
+becomes `#73bc44` at 2.23:1 and every other language is untouched.
+
+The floor is deliberately low. Pushing every language to a common contrast would read more evenly
+and destroy the thing the slab is for — Ruby taken that far lands within a few points of the
+brand accent, so the tap and the profile README would wear the same colour for opposite reasons.
 
 Two things are measured at render time rather than fixed: the headline steps down until the name
 fits on one line, and topics are dropped from the tail until the row fits. Both exist so adding a

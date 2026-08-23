@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail  # -E: the ERR trap must fire inside functions too, not just at top level
 
 # Generate and publish a repository's social preview card.
 #
@@ -96,11 +96,16 @@ while [ $# -gt 0 ]; do
     --remove)        REMOVE=1; shift ;;
     --force)         FORCE=1; shift ;;
     --theme)         THEME="${2:?--theme needs light or dark}"; shift 2 ;;
-    --serve-timeout) SERVE_TIMEOUT="${2:?--serve-timeout needs seconds}"; shift 2 ;;
+    --serve-timeout)
+      SERVE_TIMEOUT="${2:?--serve-timeout needs seconds}"
+      # A `2m` typo would otherwise make every arithmetic comparison false, skip the poll
+      # entirely, and report a perfectly healthy upload as the known CDN outage.
+      case "${SERVE_TIMEOUT}" in ''|*[!0-9]*) die "--serve-timeout takes whole seconds, got: ${SERVE_TIMEOUT}" ;; esac
+      shift 2 ;;
     --keep-surfaces) KEEP_SURFACES=1; shift ;;
     --images-dir)    IMAGES_DIR="${2:?--images-dir needs a path}"; shift 2 ;;
     --template)      TEMPLATE="${2:?--template needs a path}"; shift 2 ;;
-    -h|--help)       sed -n '3,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)       sed -n '4,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)              die "Unknown flag: $1" ;;
     *)               REPOS+=("$1"); shift ;;
   esac
@@ -217,7 +222,13 @@ html = open(template, encoding="utf-8").read()
 pattern = re.compile(r"/\*__CARD_DATA__\*/.*?/\*__END_CARD_DATA__\*/", re.S)
 if not pattern.search(html):
     sys.exit("template is missing its __CARD_DATA__ markers")
-payload = "/*__CARD_DATA__*/ " + json.dumps(card, ensure_ascii=False) + " /*__END_CARD_DATA__*/"
+# `</` is escaped because this JSON is injected INSIDE a <script> block, where the HTML parser
+# ends the element at the first `</script>` regardless of JavaScript string quoting. A
+# repository description or topic containing one would otherwise break out of the block and
+# leave a card that renders as garbage — or worse, as markup somebody else chose.
+payload = ("/*__CARD_DATA__*/ "
+           + json.dumps(card, ensure_ascii=False).replace("</", "<\\/")
+           + " /*__END_CARD_DATA__*/")
 open(out, "w", encoding="utf-8").write(pattern.sub(lambda _: payload, html, count=1))
 
 print(json.dumps({"archived": repo["isArchived"], "private": repo["isPrivate"]}))
@@ -511,18 +522,38 @@ for full in "${REPOS[@]}"; do
   fi
 
   step "Drawing the card"
-  screenshot_card "${WORK_DIR}/card.html" "${IMAGES_DIR}/$(image_name "${name}").png"
-  say "     $(assert_png "${IMAGES_DIR}/$(image_name "${name}").png") -> ${IMAGES_DIR}/$(image_name "${name}").png"
+  png="${IMAGES_DIR}/$(image_name "${name}").png"
+  screenshot_card "${WORK_DIR}/card.html" "${png}"
+  # A BARE ASSIGNMENT, and the shape is the whole point. Written as
+  # `say "  $(assert_png "${png}") -> ..."` the check's exit status sits in a command
+  # substitution in argument position, where errexit never looks at it and the ERR trap never
+  # fires: every condition assert_png tests — not a PNG, wrong dimensions, over GitHub's 1 MB
+  # ceiling — printed its complaint and the run uploaded the bad file anyway. An assignment's
+  # status IS seen by errexit. `local png_info=...` would re-swallow it, because `local`
+  # becomes the reported command.
+  png_info="$(assert_png "${png}")"
+  say "     ${png_info} -> ${png}"
 
   if [ "${RENDER_ONLY}" -eq 1 ]; then
     continue
   fi
 
   step "Uploading"
-  if ! upload_card "${owner}" "${name}" "${IMAGES_DIR}/$(image_name "${name}").png" >/dev/null; then
-    say "     FAILED after 3 attempts"
-    FAILED=$((FAILED + 1))
-    continue
+  # A NON-ZERO RETURN HERE DOES NOT MEAN NOTHING HAPPENED. It means the eval did not hand back
+  # `{"ok":true}` — and `cmux browser eval` has its own timeout while the page keeps running
+  # after it returns, so the finalize PUT that repoints og:image may well have landed. Treating
+  # this as a clean no-op made the one branch where the state is genuinely unknown the only
+  # branch never checked against the public page, while telling the operator the opposite.
+  if ! upload_card "${owner}" "${name}" "${png}" >/dev/null; then
+    say "     upload did not report success after 3 attempts — checking what actually landed"
+    if curl -sS "https://github.com/${owner}/${name}" 2>/dev/null \
+       | grep -qE 'https://repository-images\.githubusercontent\.com/'; then
+      say "     a card IS set despite the failure — treating this as an unverified upload"
+    else
+      say "     nothing was set; the repository still has GitHub's generated card"
+      FAILED=$((FAILED + 1))
+      continue
+    fi
   fi
 
   step "Verifying"
@@ -539,9 +570,20 @@ for full in "${REPOS[@]}"; do
     # that repository back before touching any of the others: the first repository in the run is
     # the canary, and one broken card is a bug where six is an outage of your own making.
     say "     reverting, and stopping before the remaining repositories"
+    # `|| true` stays: the ERR trap is disarmed here and errexit is live, so a bare failure would
+    # kill the explanation below. What changes is that the outcome is READ rather than asserted —
+    # remove_card returns the cmux CLI's status, and its JS hands back a string on every path
+    # including its error ones, so its own return value cannot tell a deletion from a no-op.
     remove_card "${owner}" "${name}" >/dev/null 2>&1 || true
+    if curl -sS "https://github.com/${owner}/${name}" 2>/dev/null \
+       | grep -qE 'https://repository-images\.githubusercontent\.com/'; then
+      reverted="STILL HAS THE BROKEN CARD — the revert did not take. Re-run with --remove, or"
+      reverted="${reverted} clear it by hand in Settings"
+    else
+      reverted="is back on the generated card"
+    fi
     printf '\n!! GitHub accepted the upload but is not publishing it.\n' >&2
-    printf '   %s/%s has been put back on GitHub'"'"'s generated card.\n' "${owner}" "${name}" >&2
+    printf '   %s/%s %s.\n' "${owner}" "${name}" "${reverted}" >&2
     printf '   This is the known pipeline outage — see social-preview/README.md. If the pipeline\n' >&2
     printf '   is merely slow, raise the bound with --serve-timeout <seconds> and re-run.\n' >&2
     printf '   --force uploads without this check and without reverting.\n' >&2
