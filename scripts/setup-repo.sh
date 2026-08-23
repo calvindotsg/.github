@@ -44,6 +44,12 @@ trap 'ABORT_LINE=${LINENO}
 #
 # Usage:
 #   ./setup-repo.sh OWNER/REPO
+#   ACTIONS_MAY_OPEN_PRS=yes|no ./setup-repo.sh OWNER/REPO
+#
+# ACTIONS_MAY_OPEN_PRS settles `can_approve_pull_request_reviews`, which decides whether the
+# ambient GITHUB_TOKEN may create and approve pull requests. Omit it and the repository's current
+# value is preserved rather than overwritten — see the long note beside that step for why the
+# asymmetry is deliberate and what it cost to learn.
 #
 # Project-specific settings NOT included (set separately):
 #   - Homepage URL (PyPI vs npm vs none)
@@ -147,13 +153,77 @@ fi
 # actions running in that job too. `read` is the correct floor; a workflow that genuinely needs
 # more should say so in its own `permissions:` block, where it is reviewable.
 #
-# can_approve_pull_request_reviews=false stops Actions approving pull requests, which would
-# otherwise let a workflow satisfy a review requirement without a human.
+# `can_approve_pull_request_reviews` IS TWO PERMISSIONS UNDER ONE NAME, AND ONLY ONE OF THEM IS IN
+# THE NAME. It governs whether Actions may APPROVE a pull request — the thing this baseline wants
+# off, since it would let a workflow satisfy a review requirement without a human — and ALSO
+# whether Actions may CREATE one at all. GitHub's own error message is the one place both appear:
+# "GitHub Actions is not permitted to create or approve pull requests (createPullRequest)".
+#
+# THE COMMENT THAT USED TO SIT HERE SAID ONLY "stops Actions approving pull requests", AND THAT
+# HALF-TRUTH COST TWO NIGHTS OF DATA. Set against the branch protection below, a blanket `false`
+# contradicts it on any repository with a write-bot: protection says every change arrives as a
+# pull request, and this says the one automated author may not open one. Nothing the bot's
+# workflow can be rewritten to do satisfies both.
+#
+# MEASURED, NOT REASONED. When this baseline reached calvindotsg/portfolio-v2 its nightly Strava
+# job died on `GH006: Protected branch update failed … Changes must be made through a pull
+# request` for two nights running, unnoticed. Rewritten to open a pull request, it then died on
+# `createPullRequest`. calvindotsg/mac-upkeep and calvindotsg/homebrew-tap did NOT break on the
+# same baseline, and the reason is the whole lesson: this setting scopes the AMBIENT
+# `GITHUB_TOKEN` only. Those two open their pull requests as a GitHub App and as a PAT
+# respectively, which are different identities and are not covered by it. portfolio-v2 was the
+# one repo whose bot used the ambient token.
+#
+# SO THE VALUE IS ASKED FOR RATHER THAN ASSUMED, and when it is not given this preserves what is
+# already there instead of flipping it. That asymmetry is deliberate. Turning it off silently
+# breaks a bot on its next unattended run, which is the failure that has actually happened here;
+# leaving it on where nobody meant it is visible in this script's own output, every run. Read
+# the warning below rather than scrolling past it.
 step "Restricting default workflow permissions"
+
+# Capture-on-success then validate the domain, the same shape as the metadata reads above: with
+# `|| CAN_APPROVE=false` the API refusing would read as a confident "it is off" and this PUT would
+# turn it off — the exact silent break this block exists to stop.
+CAN_APPROVE=$(gh api "repos/${REPO}/actions/permissions/workflow" \
+  --jq '.can_approve_pull_request_reviews' 2>/dev/null) || CAN_APPROVE=""
+case "${CAN_APPROVE}" in true|false) ;; *) CAN_APPROVE="" ;; esac
+
+case "${ACTIONS_MAY_OPEN_PRS:-}" in
+  yes) WANT_APPROVE=true ;;
+  no)  WANT_APPROVE=false ;;
+  "")  WANT_APPROVE="${CAN_APPROVE}" ;;
+  *)
+    echo "" >&2
+    echo "!! ACTIONS_MAY_OPEN_PRS is '${ACTIONS_MAY_OPEN_PRS}'; it takes 'yes' or 'no'. Nothing" >&2
+    echo "   was written for this step." >&2
+    exit 1
+    ;;
+esac
+
+if [ -z "${WANT_APPROVE}" ]; then
+  echo "" >&2
+  echo "!! Could not read whether Actions may create and approve pull requests on ${REPO}, and" >&2
+  echo "   no ACTIONS_MAY_OPEN_PRS was given to settle it." >&2
+  echo "   REFUSING to write: this PUT sends both fields, so a guess here would turn the setting" >&2
+  echo "   off, and that breaks any workflow that opens its own pull request — on its next" >&2
+  echo "   unattended run, with nobody watching. Re-run once the API answers, or pass" >&2
+  echo "   ACTIONS_MAY_OPEN_PRS=yes|no to say which it should be." >&2
+  exit 1
+fi
+
 gh api --method PUT "repos/${REPO}/actions/permissions/workflow" \
   --silent \
   -F default_workflow_permissions=read \
-  -F can_approve_pull_request_reviews=false
+  -F "can_approve_pull_request_reviews=${WANT_APPROVE}"
+
+if [ "${WANT_APPROVE}" = "true" ]; then
+  echo "  ⚠  Actions MAY create and approve pull requests on ${REPO}."
+  echo "     This is not the baseline posture. It is what a repository needs when one of its own"
+  echo "     workflows opens a pull request using the ambient GITHUB_TOKEN — and the better answer"
+  echo "     is usually a GitHub App or a PAT for that one call, which this setting does not"
+  echo "     govern, leaving it off here. If nothing here needs it:"
+  echo "       ACTIONS_MAY_OPEN_PRS=no $0 ${REPO}"
+fi
 
 # --- Secret scanning ---
 # PUBLIC only, and not by preference: on a private repository both fields require GitHub Advanced
