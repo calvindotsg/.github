@@ -13,53 +13,49 @@ LinkedIn. `scripts/social-preview.sh` draws one from the repository's own metada
 preview back, so a committed copy is the only record of what is live — and the only way a change
 to the design shows up as a diff.
 
-## Which repositories should have one — and why most should not
+## What a card carries that GitHub's generated one does not
 
-**GitHub's generated card is good, and it is live.** Measured against
-`calvindotsg/portfolio-v2`, it carries the owner and repository name, the description, the
-owner's avatar, four counters — contributors, issues, stars, forks — and a proportional language
-bar, and every one of those numbers updates itself.
+GitHub's generated card is good and it is live: owner and repository name, description, owner
+avatar, four counters — contributors, issues, stars, forks — and a proportional language bar.
+Replacing it is only worth doing if the replacement carries more, so this is the comparison, and
+it is the reason the card looks the way it does.
 
-A custom card built from the same metadata is therefore not a reskin, it is a **downgrade**:
-
-| | Generated card | A metadata-only custom card |
+| | Generated card | This card |
 |---|---|---|
-| Name, description | Yes | Yes |
-| Owner avatar | Yes | No |
-| Contributors / issues / stars / forks | Yes, **live** | Stars only, **frozen at render time** |
-| Language | Proportional bar over every language | Primary language only |
-| Licence, topics | No | Yes |
-| Stays current | Automatically | Only when someone re-runs this script |
+| Name, description, avatar | Yes | Yes |
+| Language breakdown | Proportional bar | Proportional bar, as the divider |
+| Contributors / issues / stars / forks | All four, live | Stars only, and only when non-zero |
+| Licence | No | Yes |
+| Topics | No | Yes, up to five |
+| **Install command** | **Impossible** | Yes, where one exists |
+| Stays current | Automatically | Only when someone re-runs the script |
 
-Net of that trade, a metadata-only card adds a licence and three topics and gives up four live
-counters, the avatar and the full language breakdown. That is not worth doing, and the reason to
-write it down is that it is not obvious until the two are put side by side.
+**The counters are the interesting row, and they are why the answer here differs from the
+obvious one.** Losing four live counters sounds like the deciding cost, and on a busy account it
+would be. Across the six repositories these cards cover, those counters total **5 stars, 1 fork
+and 0 open issues**, and four of the six read zero across the board. A quarter of the generated
+card is given over to an empty scoreboard — which is not neutral, because a reader who scans
+`0 · 0 · 0` learns something the repository would rather not lead with. Stars are kept here and
+suppressed at zero for exactly that reason.
 
-**So a repository earns a card only when the card can carry something the generated one
-structurally cannot.** Today that means one thing: an **install command**. It exists in no GitHub
-metadata field, so no generated card can ever show it, and for something you install and run it
-is the most useful line on the card. `repos.json` is the list, and having an entry there is what
-makes a repository eligible — `social-preview.sh` refuses to upload for a repository without one
-unless you pass `--force`.
+The language bar is copied deliberately rather than dropped: TypeScript at 81% of a repository
+and TypeScript at 51% are different facts, and a single language name cannot tell them apart. It
+does double duty as the rule between the prose and the metadata, so an element that would have
+been decoration is carrying information instead.
 
-Three qualify. `portfolio-v2`, `.github` and the `calvindotsg` profile README do not, and keep
-GitHub's card. For `portfolio-v2` the thing that would beat the default is a **screenshot of
-calvin.sg** — showing the product rather than restating its metadata. That is a different kind of
-card and is not built here.
+That leaves the install command as the clearest single win, and `repos.json` is where the three
+that have one keep it. It is optional: a repository with no entry still gets a card.
 
-## Status: nothing is uploaded, and GitHub could not serve it anyway
+## Status: nothing is uploaded — GitHub cannot serve it
 
-Two independent reasons, either sufficient on its own:
+**GitHub's repository-image pipeline is broken as of 2026-08-21.** An upload succeeds, the
+repository's `og:image` is repointed at the new asset, GitHub's own Settings page renders the
+preview tile — and the bytes never appear on `repository-images.githubusercontent.com`, which
+answers 404 indefinitely. A configured repository then unfurls as a *broken image*, which is
+worse than the generated card it replaced. So all six cards are drawn, checked and committed
+here, and none is uploaded.
 
-1. **The eligibility rule above.** Only three repositories qualify, and their cards are committed
-   here, drawn and checked, ready to upload.
-2. **GitHub's repository-image pipeline is broken as of 2026-08-21.** An upload succeeds, the
-   repository's `og:image` is repointed at the new asset, GitHub's own Settings page renders the
-   preview tile — and the bytes never appear on `repository-images.githubusercontent.com`, which
-   answers 404 indefinitely. A configured repository then unfurls as a *broken image*, which is
-   worse than the generated card it replaced.
-
-The second is not specific to this tooling: it reproduces through GitHub's own UI and is reported
+This is not specific to this tooling: it reproduces through GitHub's own UI and is reported
 publicly — [davep, "GitHub social preview is broken"][davep] (2026-08-21), citing two
 community-discussion reports of the same thing. Verified here on `portfolio-v2` across four
 uploads: policy `201`, storage `204`, finalize `200`, the asset readable at full size straight
@@ -71,7 +67,8 @@ generated card back.
 
 ```bash
 ./scripts/social-preview.sh \
-  calvindotsg/mac-upkeep calvindotsg/granola-to-minutes calvindotsg/homebrew-tap
+  calvindotsg/portfolio-v2 calvindotsg/mac-upkeep calvindotsg/granola-to-minutes \
+  calvindotsg/homebrew-tap calvindotsg/.github calvindotsg/calvindotsg
 ```
 
 ## The design

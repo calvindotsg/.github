@@ -25,8 +25,8 @@ set -euo pipefail
 #   --render-only        Draw the card and stop. Nothing is uploaded and nothing is verified.
 #   --remove             Delete the repository's uploaded card, restoring GitHub's generated
 #                        default. The escape hatch for a card that is set but not being served.
-#   --force              Upload a card for a repository with no entry in social-preview/repos.json.
-#                        Read the note beside that refusal before reaching for this.
+#   --theme light|dark   Which of calvin.sg's two themes to draw. Default light — see the note
+#                        at the top of card.html for why a static card has to pick one.
 #   --images-dir DIR     Where the PNG lands (default: social-preview/images).
 #   --template FILE      Card template (default: social-preview/card.html).
 #   --keep-surfaces      Leave the cmux browser panes open afterwards, to look at them.
@@ -42,7 +42,7 @@ IMAGES_DIR="${ROOT_DIR}/social-preview/images"
 OVERRIDES="${ROOT_DIR}/social-preview/repos.json"
 RENDER_ONLY=0
 REMOVE=0
-FORCE=0
+THEME="light"
 KEEP_SURFACES=0
 REPOS=()
 
@@ -84,7 +84,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --render-only)   RENDER_ONLY=1; shift ;;
     --remove)        REMOVE=1; shift ;;
-    --force)         FORCE=1; shift ;;
+    --theme)         THEME="${2:?--theme needs light or dark}"; shift 2 ;;
     --keep-surfaces) KEEP_SURFACES=1; shift ;;
     --images-dir)    IMAGES_DIR="${2:?--images-dir needs a path}"; shift 2 ;;
     --template)      TEMPLATE="${2:?--template needs a path}"; shift 2 ;;
@@ -132,7 +132,9 @@ metadata_json() {
   gh api graphql \
     -f query='query($o:String!,$n:String!){repository(owner:$o,name:$n){
         name description stargazerCount isArchived isPrivate
+        owner{avatarUrl(size:400)}
         primaryLanguage{name color}
+        languages(first:10,orderBy:{field:SIZE,direction:DESC}){edges{size node{name color}}}
         licenseInfo{spdxId}
         repositoryTopics(first:10){nodes{topic{name}}}
       }}' \
@@ -144,8 +146,8 @@ render_card() {
 
   metadata_json "${owner}" "${name}" > "${meta}"
 
-  OWNER="${owner}" python3 - "${meta}" "${TEMPLATE}" "${html}" "${OVERRIDES}" <<'PY'
-import json, os, sys, re
+  OWNER="${owner}" THEME="${THEME}" python3 - "${meta}" "${TEMPLATE}" "${html}" "${OVERRIDES}" <<'PY'
+import base64, json, os, re, sys, urllib.request
 
 meta, template, out, overrides = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 repo = json.load(open(meta))["data"]["repository"]
@@ -163,7 +165,23 @@ card = {
     "license": lic.get("spdxId"),
     "stars": repo.get("stargazerCount") or 0,
     "topics": [n["topic"]["name"] for n in repo["repositoryTopics"]["nodes"]],
+    "theme": os.environ.get("THEME", "light"),
+    "languages": [
+        {"name": e["node"]["name"], "color": e["node"]["color"], "size": e["size"]}
+        for e in (repo.get("languages") or {}).get("edges", [])
+    ],
 }
+
+# The avatar is inlined as a data URI rather than linked. The renderer would happily fetch the
+# remote URL, but then the screenshot silently depends on the network being up at that moment —
+# and a card that renders with a missing image is a card that still passes every dimension check
+# below. Fetching it here means a failure is an error, not a blank rectangle.
+avatar_url = (repo.get("owner") or {}).get("avatarUrl")
+if avatar_url:
+    with urllib.request.urlopen(avatar_url, timeout=20) as fh:
+        blob = fh.read()
+        ctype = fh.headers.get_content_type() or "image/png"
+    card["avatar"] = f"data:{ctype};base64," + base64.b64encode(blob).decode()
 
 # The install command is the only field not read from GitHub, because GitHub has nowhere to
 # keep it. Its presence is also the eligibility test — see the note at the top of repos.json.
@@ -175,6 +193,11 @@ entry = extra.get(f"{os.environ['OWNER']}/{repo['name']}", {})
 if entry.get("install"):
     card["install"] = entry["install"]
 
+# A per-repository theme overrides the run-wide default. Light is the default everywhere; a
+# repository only names a theme here when there is a reason on the card, not a mood.
+if entry.get("theme"):
+    card["theme"] = entry["theme"]
+
 html = open(template, encoding="utf-8").read()
 # The template keeps a real sample between these markers so it draws a finished card when
 # opened directly. Replacing the region rather than the whole script block is what lets the
@@ -185,8 +208,7 @@ if not pattern.search(html):
 payload = "/*__CARD_DATA__*/ " + json.dumps(card, ensure_ascii=False) + " /*__END_CARD_DATA__*/"
 open(out, "w", encoding="utf-8").write(pattern.sub(lambda _: payload, html, count=1))
 
-print(json.dumps({"archived": repo["isArchived"], "private": repo["isPrivate"],
-                  "eligible": bool(entry.get("install"))}))
+print(json.dumps({"archived": repo["isArchived"], "private": repo["isPrivate"]}))
 PY
 }
 
@@ -199,6 +221,38 @@ screenshot_card() {
   # raises this flag once `document.fonts.ready` has resolved and both passes are done.
   cmux browser "${RENDER_SURFACE}" wait \
       --function "document.documentElement.dataset.cardReady==='1'" --timeout-ms 20000 >/dev/null
+
+  # A LAYOUT CHECK THAT CAN FAIL, because the last one could not. The language bar is a 7px flex
+  # item in a column, so when the card ran out of room it shrank to zero rather than overflowing
+  # — and it did that only on the cards carrying an install chip, which are the tallest. Every
+  # other check still passed: the PNG was 1280x640, under a megabyte, and looked fine unless you
+  # compared two cards side by side. Measuring the drawn element is the only thing that catches
+  # an element that renders at zero height.
+  local layout
+  layout="$(cmux browser "${RENDER_SURFACE}" eval '(() => {
+    const bar = document.getElementById("langbar");
+    const name = document.getElementById("name");
+    const chip = document.getElementById("install");
+    return JSON.stringify({
+      barWanted: !bar.hidden,
+      barHeight: bar.getBoundingClientRect().height,
+      nameHeight: name.getBoundingClientRect().height,
+      chipWanted: !chip.hidden,
+      chipHeight: chip.getBoundingClientRect().height
+    });
+  })()' 2>&1)"
+  printf '%s' "${layout}" | python3 -c '
+import json, sys
+d = json.loads(sys.stdin.read())
+bar, chip, name = d["barHeight"], d["chipHeight"], d["nameHeight"]
+if d["barWanted"] and bar < 6:
+    sys.exit("language bar collapsed to " + str(bar) + "px - the card ran out of vertical room")
+if d["chipWanted"] and chip < 40:
+    sys.exit("install chip collapsed to " + str(chip) + "px")
+if name < 40:
+    sys.exit("headline collapsed to " + str(name) + "px")
+'
+
   cmux browser "${RENDER_SURFACE}" screenshot --out "${out}" >/dev/null
 }
 
@@ -426,23 +480,6 @@ for full in "${REPOS[@]}"; do
       say "     still set: ${og_now}"
       FAILED=$((FAILED + 1))
     fi
-    continue
-  fi
-
-  # A custom card that only restates GitHub metadata is a downgrade, not a reskin: the generated
-  # card already carries the name, description, avatar, a LIVE contributors/issues/stars/forks
-  # row and a proportional language bar, and it updates itself. Replacing it with a snapshot
-  # drops four counters and freezes the rest. Refusing here rather than only warning in a README
-  # is deliberate — the README is not what runs at 2am.
-  #
-  # Checked BEFORE drawing, so a refused repository leaves no PNG behind to be committed and
-  # later mistaken for a card that is live. `--render-only` still draws anything, because looking
-  # at what a card would be is how you decide whether it clears the bar.
-  if [ "${RENDER_ONLY}" -eq 0 ] && [ "${FORCE}" -eq 0 ] &&
-     ! printf '%s' "${state}" | grep -q '"eligible": true'; then
-    say "     no entry in $(basename "${OVERRIDES}") — GitHub's generated card carries more than"
-    say "     this one would, so nothing was drawn or uploaded. --force overrides, and"
-    say "     social-preview/README.md explains what a repository needs to earn a card."
     continue
   fi
 

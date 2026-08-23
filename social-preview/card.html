@@ -5,12 +5,35 @@
 <title>Social preview card</title>
 <style>
     /*
-     * THE PALETTE IS calvin.sg's, NOT A NEW ONE. Canvas, card, rule, ink and accent are the
-     * dark-theme tokens from portfolio-v2's `src/layouts/BasicLayout.astro`, named here by the
-     * token they came from. A card system that invented its own colours would be a second
-     * brand to keep in step with the site; this one goes stale only when the site does.
+     * THE PALETTE IS calvin.sg's, NOT A NEW ONE, and both of the site's themes are here because
+     * the site has two. calvin.sg serves Latte by day and Mocha by night; a social card is a
+     * static PNG and cannot switch, so ONE of them has to be chosen once, for everybody.
+     *
+     * Light is the default, and it is chosen on legibility rather than taste. An unfurl is
+     * rendered small — the Telegram card this was checked against is about 590px wide, roughly
+     * a 2.2x downscale, and Slack's is smaller again. Downsampling thins strokes, and thin
+     * light-on-dark type loses more to it than dark-on-light does, because the bright glyph
+     * bleeds into the dark ground rather than the other way about. Light also puts the brand on
+     * its real ink — primary-600 #A82334, the deep red the site only uses in Latte; the dark
+     * theme's #F3A3AA is a pale accommodation for a dark ground, not the brand colour.
+     *
+     * Dark is kept and reachable with `--theme dark`, because it wins on one real axis: a dark
+     * card is unmistakable in a feed of white GitHub default cards. Render both and look before
+     * changing the default — `--render-only --theme dark` costs nothing.
      */
     :root {
+        --canvas: #FAFAFA;   /* grey-50        — site --background (light) */
+        --card: #F5F5F5;     /* grey-100       — site --card-background */
+        --rule: #E5E5E5;     /* grey-200       — site --card-border */
+        --ink: #0B0B0B;      /* darkslate-900  — site --text */
+        --muted: #52525B;
+        --dim: #8A8A8F;
+        --accent: #A82334;   /* primary-600    — site --accent / --brand-ink */
+        --terminal-bg: #16181D;  /* the install chip is a real terminal on the light card */
+        --terminal-ink: #F5F5F5;
+    }
+
+    :root[data-theme="dark"] {
         --canvas: #111111;   /* darkslate-700 — site --background */
         --card: #171717;     /* darkslate-500 — site --card-background */
         --rule: #2C2C2C;     /* darkslate-100 — site --card-border */
@@ -18,7 +41,12 @@
         --muted: #A3A3A3;
         --dim: #6E6E6E;
         --accent: #F3A3AA;   /* primary-200   — site --shadow / --brand-ink */
+        --terminal-bg: #0D0D0D;
+        --terminal-ink: var(--ink);
+    }
 
+    /* Theme-independent, so declared once and outside both blocks above. */
+    :root {
         /* Filled per card from the repository's own primaryLanguage.color, which GitHub's
          * GraphQL API returns straight out of linguist. Falls back to the brand accent for a
          * repository that has no language — which is the honest answer for a profile README. */
@@ -74,6 +102,43 @@
         border-radius: 20px;
     }
 
+    /*
+     * THE LANGUAGE BAR, AND WHY IT IS WORTH COPYING FROM GITHUB. It is the one thing the
+     * generated card carried that a single language name cannot replace: TypeScript at 81% of a
+     * repository and TypeScript at 51% are different facts, and the bar is the only element here
+     * that says which. Segment widths are byte shares straight from the languages API and the
+     * colours are linguist's, so this is the same widget GitHub draws above a file list.
+     *
+     * It also explains the slab. The slab is the dominant segment, enlarged — once the two are
+     * on the same card the colour coding stops needing a caption.
+     */
+    .langbar {
+        margin-top: 52px;
+        height: 7px;
+        display: flex;
+        border-radius: 4px;
+        overflow: hidden;
+        /* A flex item in a column that is running out of room shrinks BEFORE it overflows, and
+         * a 7px bar shrinks to nothing without any visible sign that it did. It silently
+         * disappeared on exactly the cards carrying an install chip — the tallest ones — while
+         * rendering fine on the others, which reads as "the bar works" if you only check one. */
+        flex: 0 0 auto;
+    }
+
+    /* When the bar is present it REPLACES the meta row's rule rather than sitting beside it.
+     * The divider between the prose and the metadata was always going to be a horizontal line
+     * across the card; making that line the language breakdown means the structural element
+     * carries information instead of merely separating. Repositories with no detected language
+     * keep the plain rule, which is what the fallback below is. */
+    .card.has-langbar .meta {
+        margin-top: 22px;
+        padding-top: 0;
+        border-top: none;
+    }
+
+    .langbar > span { height: 100%; }
+    .langbar[hidden] { display: none; }
+
     .card {
         position: absolute;
         inset: var(--safe);
@@ -100,6 +165,30 @@
     }
 
     .owner svg { width: 27px; height: 27px; fill: var(--accent); }
+
+    /*
+     * THE AVATAR IS IDENTITY, AND DROPPING IT WAS A REGRESSION. GitHub's generated card carries
+     * it, and a reader recognises a face faster than they read a handle — on a personal
+     * account, where the repositories are the portfolio, that is most of what the card is for.
+     *
+     * It gets a plain frame and NOT a slab of its own. calvin.sg sets its portrait on an offset
+     * slab and that motif is already spent on the card behind this one; two offset slabs on one
+     * 1280x640 card is the accessory to take off before leaving the house.
+     */
+    .identity { display: flex; align-items: flex-start; gap: 44px; }
+    .identity-text { min-width: 0; flex: 1; }
+
+    .avatar {
+        flex: 0 0 auto;
+        width: 168px;
+        height: 168px;
+        border-radius: 24px;
+        border: 1px solid var(--rule);
+        object-fit: cover;
+        /* Optically aligned with the cap-height of the handle above the name, rather than the
+         * top of its line box. */
+        margin-top: 6px;
+    }
 
     .name {
         margin-top: 24px;
@@ -148,12 +237,13 @@
         gap: 16px;
         max-width: 100%;
         padding: 18px 26px;
-        /* Recessed rather than raised: darker than the card it sits on, the way a terminal is
-         * darker than the window around it. */
-        background: #0D0D0D;
+        /* A real terminal, not a recessed panel. On the light card this is the one dark
+         * element, which is exactly right: it is the only part of the card the reader is meant
+         * to copy into a shell, and it looks like where it is going. */
+        background: var(--terminal-bg);
         border: 1px solid var(--rule);
         border-radius: 12px;
-        color: var(--ink);
+        color: var(--terminal-ink);
         font-size: 28px;
         font-weight: 500;
         white-space: nowrap;
@@ -161,9 +251,14 @@
     }
 
     /* The prompt carries the language colour, tying the command to the slab behind the card. */
+    /* `display: inline-flex` outranks the `hidden` attribute's UA `display: none`, so without
+     * this a repository with no install command draws an empty black pill. */
+    .install[hidden] { display: none; }
+
     .install .prompt { color: var(--lang-true, var(--lang)); font-weight: 700; }
 
     .meta {
+        flex: 0 0 auto;
         margin-top: 52px;
         padding-top: 26px;
         /* The rule is structural: it separates what a person reads from what a machine
@@ -213,7 +308,8 @@
 <body>
 <div class="slab" id="slab"></div>
 <div class="card">
-    <div>
+    <div class="identity">
+      <div class="identity-text">
         <div class="owner mono">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8Z"></path></svg>
             <span id="owner"></span>
@@ -221,7 +317,10 @@
         <div class="name" id="name"></div>
         <div class="desc" id="desc"></div>
         <div class="install mono" id="install" hidden></div>
+      </div>
+      <img class="avatar" id="avatar" alt="" hidden>
     </div>
+    <div class="langbar" id="langbar" hidden></div>
     <div class="meta">
         <div class="facts mono" id="facts"></div>
         <div class="topics mono" id="topics"></div>
@@ -244,10 +343,21 @@
         license: "MIT",
         stars: 2,
         topics: ["automation", "cli", "homebrew"],
-        install: "brew install calvindotsg/tap/mac-upkeep"
+        install: "brew install calvindotsg/tap/mac-upkeep",
+        theme: "light",
+        avatar: null,
+        languages: [{name: "Python", color: "#3572A5", size: 100}]
     } /*__END_CARD_DATA__*/;
 
     const $ = (id) => document.getElementById(id);
+
+    if (CARD.theme === "dark") document.documentElement.dataset.theme = "dark";
+
+    if (CARD.avatar) {
+        const a = $("avatar");
+        a.src = CARD.avatar;
+        a.hidden = false;
+    }
 
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
         "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -304,7 +414,7 @@
      * and, unlike a CSS clamp, it cannot silently drop the second half of a name.
      */
     const nameEl = $("name");
-    const NAME_BUDGET = 1010;
+    const NAME_BUDGET = CARD.avatar ? 800 : 1010;
     for (let size = 88; size >= 42 && nameEl.offsetWidth > NAME_BUDGET; size -= 2) {
         nameEl.style.fontSize = size + "px";
     }
@@ -321,9 +431,25 @@
         document.getElementById("cmd").textContent = CARD.install;
         // Same treatment as the headline: step the command down until it fits on one line,
         // rather than picking a size that happens to suit today's longest command.
-        for (let size = 28; size >= 18 && el.scrollWidth > 1010; size -= 1) {
+        for (let size = 28; size >= 18 && el.scrollWidth > (CARD.avatar ? 800 : 1010); size -= 1) {
             el.style.fontSize = size + "px";
         }
+    }
+
+    /* Segments below ~1.2% are dropped rather than drawn: at 1200px of card width they are a
+     * sub-pixel sliver that reads as a rendering seam, and the remainder is renormalised so the
+     * bar still spans the full width. GitHub keeps them; at this size they do not survive. */
+    const langs = (CARD.languages || []).filter((l) => l.size > 0);
+    if (langs.length) {
+        const total = langs.reduce((n, l) => n + l.size, 0);
+        const kept = langs.filter((l) => l.size / total >= 0.012);
+        const keptTotal = kept.reduce((n, l) => n + l.size, 0) || 1;
+        $("langbar").innerHTML = kept
+            .map((l) => '<span style="width:' + (100 * l.size / keptTotal).toFixed(3) +
+                        '%;background:' + (l.color || "#8A8A8F") + '"></span>')
+            .join("");
+        $("langbar").hidden = false;
+        document.querySelector(".card").classList.add("has-langbar");
     }
 
     const facts = [];

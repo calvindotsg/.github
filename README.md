@@ -128,13 +128,14 @@ from a signed-in browser pane.
 ./scripts/social-preview.sh --remove calvindotsg/mac-upkeep        # back to GitHub's default
 ```
 
-**Most repositories should keep GitHub's generated card.** It already carries the name,
-description, avatar, four *live* counters and a proportional language bar. A custom card built
-from the same metadata trades those counters for a licence and some topics, and freezes the rest
-into a snapshot — a downgrade. A repository earns a card only when the card carries something the
-generated one structurally cannot, which today means an **install command**; `repos.json` is that
-list, and the script refuses to upload for a repository missing from it. Three qualify:
-`mac-upkeep`, `granola-to-minutes`, `homebrew-tap`.
+All six public repositories get a card. GitHub's generated card carries four live counters —
+contributors, issues, stars, forks — which is the usual reason not to replace it; across these
+repositories those counters total 5 stars, 1 fork and 0 issues, and four of six read zero
+throughout, so a quarter of the generated card is an empty scoreboard. The card here keeps what
+was worth keeping (avatar, and the proportional language bar, reused as the divider between prose
+and metadata), drops the empty counters, and adds a licence, topics and — for the three
+repositories that have one — an **install command**, which no generated card can ever show.
+`repos.json` holds those commands and any per-repository theme override.
 
 **Nothing is uploaded yet.** GitHub's repository-image pipeline has been broken since 2026-08-21:
 the upload succeeds and `og:image` is repointed, but the bytes never reach the CDN, so a
