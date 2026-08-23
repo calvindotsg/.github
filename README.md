@@ -117,10 +117,10 @@ fi
 ## Social Preview Cards
 
 `social-preview/` holds a card template and `scripts/social-preview.sh`, which draws a
-repository's social preview from its own metadata and uploads it. GitHub has no API for that
-setting — description, homepage and topics are all writable over REST, and the one field that
-decides what a link looks like in Slack or on LinkedIn is not — so the script drives the
-Settings page's own upload requests from a signed-in browser pane.
+repository's social preview and uploads it. GitHub has no API for that setting — description,
+homepage and topics are all writable over REST, and the one field deciding what a link looks like
+in Slack or on LinkedIn is not — so the script drives the Settings page's own upload requests
+from a signed-in browser pane.
 
 ```bash
 ./scripts/social-preview.sh --render-only calvindotsg/mac-upkeep   # draw it, change nothing
@@ -128,12 +128,19 @@ Settings page's own upload requests from a signed-in browser pane.
 ./scripts/social-preview.sh --remove calvindotsg/mac-upkeep        # back to GitHub's default
 ```
 
-**Not rolled out yet, deliberately.** GitHub's repository-image pipeline has been broken since
-2026-08-21: the upload succeeds and the repository's `og:image` is repointed, but the bytes
-never reach the CDN, so every link unfurls as a *broken* image rather than as GitHub's
-generated card. Verified across four uploads on `portfolio-v2` and then reverted. The cards are
-committed and ready; see [social-preview/README.md](social-preview/README.md) for the protocol,
-the evidence, and how to check whether GitHub has fixed it before running the rollout.
+**Most repositories should keep GitHub's generated card.** It already carries the name,
+description, avatar, four *live* counters and a proportional language bar. A custom card built
+from the same metadata trades those counters for a licence and some topics, and freezes the rest
+into a snapshot — a downgrade. A repository earns a card only when the card carries something the
+generated one structurally cannot, which today means an **install command**; `repos.json` is that
+list, and the script refuses to upload for a repository missing from it. Three qualify:
+`mac-upkeep`, `granola-to-minutes`, `homebrew-tap`.
+
+**Nothing is uploaded yet.** GitHub's repository-image pipeline has been broken since 2026-08-21:
+the upload succeeds and `og:image` is repointed, but the bytes never reach the CDN, so a
+configured repository unfurls as a *broken* image. Verified across four uploads on `portfolio-v2`
+and reverted. See [social-preview/README.md](social-preview/README.md) for the comparison that
+sets the bar, the upload protocol, and how to check whether GitHub has fixed it.
 
 Requires macOS with cmux running, since the upload needs a real authenticated browser session.
 

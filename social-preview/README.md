@@ -13,45 +13,80 @@ LinkedIn. `scripts/social-preview.sh` draws one from the repository's own metada
 preview back, so a committed copy is the only record of what is live — and the only way a change
 to the design shows up as a diff.
 
-## Status: uploads currently land, but GitHub does not serve them
+## Which repositories should have one — and why most should not
 
-**Nothing in this directory has been rolled out, and that is deliberate.** GitHub's
-repository-image pipeline is broken as of 2026-08-21: an upload succeeds, the repository's
-`og:image` is repointed at the new asset, GitHub's own Settings page renders the preview tile —
-and the bytes never appear on `repository-images.githubusercontent.com`, which answers 404
-forever. The result is worse than doing nothing: every link to the repository unfurls as a broken
-image, where an unconfigured repository unfurls as GitHub's generated card.
+**GitHub's generated card is good, and it is live.** Measured against
+`calvindotsg/portfolio-v2`, it carries the owner and repository name, the description, the
+owner's avatar, four counters — contributors, issues, stars, forks — and a proportional language
+bar, and every one of those numbers updates itself.
 
-This is not specific to this tooling. It reproduces through GitHub's own UI, and is reported
-publicly — [davep, "GitHub social preview is broken"][davep] (2026-08-21), which counts two
-community-discussion reports of the same thing.
+A custom card built from the same metadata is therefore not a reskin, it is a **downgrade**:
 
-Verified here on `calvindotsg/portfolio-v2` across four separate uploads: policy `201`, storage
-`204`, finalize `200`, asset readable straight from GitHub's own S3 bucket at full size, and the
-CDN URL 404 for over 45 minutes. `--remove` restored the generated card.
+| | Generated card | A metadata-only custom card |
+|---|---|---|
+| Name, description | Yes | Yes |
+| Owner avatar | Yes | No |
+| Contributors / issues / stars / forks | Yes, **live** | Stars only, **frozen at render time** |
+| Language | Proportional bar over every language | Primary language only |
+| Licence, topics | No | Yes |
+| Stays current | Automatically | Only when someone re-runs this script |
 
-**To roll out once GitHub fixes it:**
+Net of that trade, a metadata-only card adds a licence and three topics and gives up four live
+counters, the avatar and the full language breakdown. That is not worth doing, and the reason to
+write it down is that it is not obvious until the two are put side by side.
+
+**So a repository earns a card only when the card can carry something the generated one
+structurally cannot.** Today that means one thing: an **install command**. It exists in no GitHub
+metadata field, so no generated card can ever show it, and for something you install and run it
+is the most useful line on the card. `repos.json` is the list, and having an entry there is what
+makes a repository eligible — `social-preview.sh` refuses to upload for a repository without one
+unless you pass `--force`.
+
+Three qualify. `portfolio-v2`, `.github` and the `calvindotsg` profile README do not, and keep
+GitHub's card. For `portfolio-v2` the thing that would beat the default is a **screenshot of
+calvin.sg** — showing the product rather than restating its metadata. That is a different kind of
+card and is not built here.
+
+## Status: nothing is uploaded, and GitHub could not serve it anyway
+
+Two independent reasons, either sufficient on its own:
+
+1. **The eligibility rule above.** Only three repositories qualify, and their cards are committed
+   here, drawn and checked, ready to upload.
+2. **GitHub's repository-image pipeline is broken as of 2026-08-21.** An upload succeeds, the
+   repository's `og:image` is repointed at the new asset, GitHub's own Settings page renders the
+   preview tile — and the bytes never appear on `repository-images.githubusercontent.com`, which
+   answers 404 indefinitely. A configured repository then unfurls as a *broken image*, which is
+   worse than the generated card it replaced.
+
+The second is not specific to this tooling: it reproduces through GitHub's own UI and is reported
+publicly — [davep, "GitHub social preview is broken"][davep] (2026-08-21), citing two
+community-discussion reports of the same thing. Verified here on `portfolio-v2` across four
+uploads: policy `201`, storage `204`, finalize `200`, the asset readable at full size straight
+from GitHub's own S3 bucket, and the CDN URL 404 for over 45 minutes. `--remove` put the
+generated card back.
+
+**To roll out once GitHub fixes it**, confirm on one repository that the script prints
+`set and serving` rather than `serving: not yet`, then:
 
 ```bash
 ./scripts/social-preview.sh \
-  calvindotsg/portfolio-v2 calvindotsg/mac-upkeep calvindotsg/granola-to-minutes \
-  calvindotsg/homebrew-tap calvindotsg/.github calvindotsg/calvindotsg
+  calvindotsg/mac-upkeep calvindotsg/granola-to-minutes calvindotsg/homebrew-tap
 ```
-
-Check first, on any repository, that a fresh upload actually serves — the script prints
-`set and serving` when it does and `serving: not yet` when it does not.
 
 ## The design
 
-One template, `card.html`, filled per repository. Every value on the card is read from the
-repository at render time, so a card cannot drift from the repository it describes without the
-next run correcting it.
+One template, `card.html`, filled per repository. Every value except the install command is read
+from the repository at render time. Nothing re-runs this script on its own, so a committed card
+is a **snapshot**: a star arriving or a description being edited leaves it stale until someone
+runs it again. That is the cost the eligibility rule above is paying for.
 
 | | |
 |---|---|
 | **Palette** | calvin.sg's dark theme, token for token — `#111111` canvas, `#171717` card, `#2C2C2C` rule, `#FAFAFA` ink, `#F3A3AA` accent. Not a second brand to maintain. |
 | **Type** | SF Pro for prose. FiraCode for the handle, language, licence and topics — every repository here is something you install and run from a shell, so the machine-readable half of the card is set in the font that account's terminal uses. |
 | **Signature** | The offset slab behind the card, inherited from the portrait treatment on calvin.sg — and coloured by the repository's **primary language**, not by the brand. The same element that makes the account's cards one set tells them apart before a word is read. The dot beside the language name is the legend. |
+| **Install line** | The one element the generated card cannot have. Set as a terminal line — recessed, monospaced, with the prompt in the language colour — because that is where the command will be typed. |
 | **Safe area** | GitHub's template asks for a 40pt border its crops may eat. That margin holds the slab and nothing else, so the only croppable element is the only decorative one. |
 
 Language colours come from `primaryLanguage.color` on GitHub's GraphQL API, which returns

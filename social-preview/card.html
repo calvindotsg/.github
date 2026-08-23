@@ -131,6 +131,38 @@
         overflow: hidden;
     }
 
+    /*
+     * THE ONE LINE GITHUB'S GENERATED CARD CANNOT DRAW, and the reason a custom card exists at
+     * all. An install command is in no GitHub metadata field, so no card built from metadata can
+     * ever show it — while everything else here (name, description, language, counters) the
+     * default card already draws, live, and better. A card without this element is a downgrade;
+     * `scripts/social-preview.sh` refuses to upload one without being forced.
+     *
+     * Set as a terminal line rather than a button, because that is where the command is going to
+     * be typed, and the card is already speaking that language in its utility face.
+     */
+    .install {
+        margin-top: 30px;
+        display: inline-flex;
+        align-items: baseline;
+        gap: 16px;
+        max-width: 100%;
+        padding: 18px 26px;
+        /* Recessed rather than raised: darker than the card it sits on, the way a terminal is
+         * darker than the window around it. */
+        background: #0D0D0D;
+        border: 1px solid var(--rule);
+        border-radius: 12px;
+        color: var(--ink);
+        font-size: 28px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+
+    /* The prompt carries the language colour, tying the command to the slab behind the card. */
+    .install .prompt { color: var(--lang-true, var(--lang)); font-weight: 700; }
+
     .meta {
         margin-top: 52px;
         padding-top: 26px;
@@ -188,6 +220,7 @@
         </div>
         <div class="name" id="name"></div>
         <div class="desc" id="desc"></div>
+        <div class="install mono" id="install" hidden></div>
     </div>
     <div class="meta">
         <div class="facts mono" id="facts"></div>
@@ -204,13 +237,14 @@
      */
     const CARD = /*__CARD_DATA__*/ {
         owner: "calvindotsg",
-        name: "portfolio-v2",
-        description: "calvin.sg — Astro site with DNS-as-code, live Strava goal tracking, and a rendered-output test suite",
-        language: "TypeScript",
-        languageColor: "#3178c6",
+        name: "mac-upkeep",
+        description: "Zero-config CLI that runs unified macOS maintenance — caches, updates, services — on boot and weekly via launchd",
+        language: "Python",
+        languageColor: "#3572A5",
         license: "MIT",
-        stars: 0,
-        topics: ["astro", "portfolio", "personal-website"]
+        stars: 2,
+        topics: ["automation", "cli", "homebrew"],
+        install: "brew install calvindotsg/tap/mac-upkeep"
     } /*__END_CARD_DATA__*/;
 
     const $ = (id) => document.getElementById(id);
@@ -279,6 +313,18 @@
      * usually buys the whole sentence; below that it stops being legible in a Slack unfurl, so
      * the clamp takes over and the tail is dropped on purpose rather than by accident. */
     if ((CARD.description || "").length > 88) $("desc").style.fontSize = "29px";
+
+    if (CARD.install) {
+        const el = $("install");
+        el.hidden = false;
+        el.innerHTML = '<span class="prompt">$</span><span id="cmd"></span>';
+        document.getElementById("cmd").textContent = CARD.install;
+        // Same treatment as the headline: step the command down until it fits on one line,
+        // rather than picking a size that happens to suit today's longest command.
+        for (let size = 28; size >= 18 && el.scrollWidth > 1010; size -= 1) {
+            el.style.fontSize = size + "px";
+        }
+    }
 
     const facts = [];
     if (CARD.language) {

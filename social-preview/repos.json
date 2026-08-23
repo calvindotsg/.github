@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "The one thing a custom card can carry that GitHub's generated card structurally cannot.",
+    "",
+    "GitHub's default card already draws the owner, the repository name, the description, the",
+    "owner's avatar, a live contributors/issues/stars/forks row and a proportional language bar,",
+    "and it updates itself. A custom card that restates that metadata is a downgrade: it drops",
+    "four live counters and freezes the rest into a snapshot. See social-preview/README.md.",
+    "",
+    "An install command is not in any GitHub metadata field, so no generated card can ever show",
+    "it — and for something you install and run, it is the most useful line on the card. That is",
+    "the bar for appearing in this file, and appearing in this file is what makes a repository",
+    "eligible for a custom card at all.",
+    "",
+    "Every command below is copied from that repository's own README, and is the first command a",
+    "reader there is given. Check it against the README when the README changes."
+  ],
+
+  "calvindotsg/mac-upkeep": {
+    "install": "brew install calvindotsg/tap/mac-upkeep"
+  },
+  "calvindotsg/granola-to-minutes": {
+    "install": "npx granola-to-minutes export"
+  },
+  "calvindotsg/homebrew-tap": {
+    "install": "brew tap calvindotsg/tap"
+  }
+}

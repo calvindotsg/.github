@@ -25,6 +25,8 @@ set -euo pipefail
 #   --render-only        Draw the card and stop. Nothing is uploaded and nothing is verified.
 #   --remove             Delete the repository's uploaded card, restoring GitHub's generated
 #                        default. The escape hatch for a card that is set but not being served.
+#   --force              Upload a card for a repository with no entry in social-preview/repos.json.
+#                        Read the note beside that refusal before reaching for this.
 #   --images-dir DIR     Where the PNG lands (default: social-preview/images).
 #   --template FILE      Card template (default: social-preview/card.html).
 #   --keep-surfaces      Leave the cmux browser panes open afterwards, to look at them.
@@ -37,8 +39,10 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 TEMPLATE="${ROOT_DIR}/social-preview/card.html"
 IMAGES_DIR="${ROOT_DIR}/social-preview/images"
+OVERRIDES="${ROOT_DIR}/social-preview/repos.json"
 RENDER_ONLY=0
 REMOVE=0
+FORCE=0
 KEEP_SURFACES=0
 REPOS=()
 
@@ -80,6 +84,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --render-only)   RENDER_ONLY=1; shift ;;
     --remove)        REMOVE=1; shift ;;
+    --force)         FORCE=1; shift ;;
     --keep-surfaces) KEEP_SURFACES=1; shift ;;
     --images-dir)    IMAGES_DIR="${2:?--images-dir needs a path}"; shift 2 ;;
     --template)      TEMPLATE="${2:?--template needs a path}"; shift 2 ;;
@@ -139,10 +144,10 @@ render_card() {
 
   metadata_json "${owner}" "${name}" > "${meta}"
 
-  OWNER="${owner}" python3 - "${meta}" "${TEMPLATE}" "${html}" <<'PY'
+  OWNER="${owner}" python3 - "${meta}" "${TEMPLATE}" "${html}" "${OVERRIDES}" <<'PY'
 import json, os, sys, re
 
-meta, template, out = sys.argv[1], sys.argv[2], sys.argv[3]
+meta, template, out, overrides = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 repo = json.load(open(meta))["data"]["repository"]
 if repo is None:
     sys.exit("repository not found")
@@ -160,6 +165,16 @@ card = {
     "topics": [n["topic"]["name"] for n in repo["repositoryTopics"]["nodes"]],
 }
 
+# The install command is the only field not read from GitHub, because GitHub has nowhere to
+# keep it. Its presence is also the eligibility test — see the note at the top of repos.json.
+extra = {}
+if os.path.exists(overrides):
+    with open(overrides, encoding="utf-8") as fh:
+        extra = {k: v for k, v in json.load(fh).items() if not k.startswith("_")}
+entry = extra.get(f"{os.environ['OWNER']}/{repo['name']}", {})
+if entry.get("install"):
+    card["install"] = entry["install"]
+
 html = open(template, encoding="utf-8").read()
 # The template keeps a real sample between these markers so it draws a finished card when
 # opened directly. Replacing the region rather than the whole script block is what lets the
@@ -170,7 +185,8 @@ if not pattern.search(html):
 payload = "/*__CARD_DATA__*/ " + json.dumps(card, ensure_ascii=False) + " /*__END_CARD_DATA__*/"
 open(out, "w", encoding="utf-8").write(pattern.sub(lambda _: payload, html, count=1))
 
-print(json.dumps({"archived": repo["isArchived"], "private": repo["isPrivate"]}))
+print(json.dumps({"archived": repo["isArchived"], "private": repo["isPrivate"],
+                  "eligible": bool(entry.get("install"))}))
 PY
 }
 
@@ -410,6 +426,23 @@ for full in "${REPOS[@]}"; do
       say "     still set: ${og_now}"
       FAILED=$((FAILED + 1))
     fi
+    continue
+  fi
+
+  # A custom card that only restates GitHub metadata is a downgrade, not a reskin: the generated
+  # card already carries the name, description, avatar, a LIVE contributors/issues/stars/forks
+  # row and a proportional language bar, and it updates itself. Replacing it with a snapshot
+  # drops four counters and freezes the rest. Refusing here rather than only warning in a README
+  # is deliberate — the README is not what runs at 2am.
+  #
+  # Checked BEFORE drawing, so a refused repository leaves no PNG behind to be committed and
+  # later mistaken for a card that is live. `--render-only` still draws anything, because looking
+  # at what a card would be is how you decide whether it clears the bar.
+  if [ "${RENDER_ONLY}" -eq 0 ] && [ "${FORCE}" -eq 0 ] &&
+     ! printf '%s' "${state}" | grep -q '"eligible": true'; then
+    say "     no entry in $(basename "${OVERRIDES}") — GitHub's generated card carries more than"
+    say "     this one would, so nothing was drawn or uploaded. --force overrides, and"
+    say "     social-preview/README.md explains what a repository needs to earn a card."
     continue
   fi
 
