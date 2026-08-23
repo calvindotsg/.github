@@ -143,6 +143,15 @@ configured repository unfurls as a *broken* image. Verified across four uploads 
 and reverted. See [social-preview/README.md](social-preview/README.md) for the comparison that
 sets the bar, the upload protocol, and how to check whether GitHub has fixed it.
 
+**One card is in use regardless.** `homebrew-tap`'s README opens with its own, hotlinked from
+`social-preview/images/` here rather than copied into that repository, so regenerating a card
+updates every README showing it instead of leaving a second copy to drift. `images/dark/` holds
+the same six drawn with `--theme dark`, because a README is rendered in the *reader's* theme and
+a light-canvas PNG glares on GitHub dark mode; the pair is embedded as `<picture>`. None of that
+depends on the broken pipeline above — the social preview slot takes one image and it is the
+light one. A card needs the **full column width** to stay readable, which rules out a
+two-column gallery; `social-preview/README.md` has the measurements.
+
 Requires macOS with cmux running, since the upload needs a real authenticated browser session.
 
 ## Related
