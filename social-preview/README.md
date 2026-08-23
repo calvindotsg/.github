@@ -114,14 +114,44 @@ uploads: policy `201`, storage `204`, finalize `200`, the asset readable at full
 from GitHub's own S3 bucket, and the CDN URL 404 for over 45 minutes. `--remove` put the
 generated card back.
 
-**To roll out once GitHub fixes it**, confirm on one repository that the script prints
-`serving after Ns` rather than `NOT serving after Ns`, then:
+**Re-checked 2026-08-23 — still broken.** `mac-upkeep` uploaded cleanly, the asset answered
+404 for the full 120-second bound, and the script reverted it and stopped without being asked.
+That is the point of the gate: a re-check costs one command and cannot leave a repository
+worse than it found it.
 
-```bash
-./scripts/social-preview.sh \
-  calvindotsg/portfolio-v2 calvindotsg/mac-upkeep calvindotsg/granola-to-minutes \
-  calvindotsg/homebrew-tap calvindotsg/.github calvindotsg/calvindotsg
-```
+### Checking whether it is fixed
+
+**A preflight against somebody else's card does not work, and is worth not re-inventing.**
+Every well-known repository's preview was uploaded *before* the outage and keeps serving right
+through it, so that probe reports healthy exactly when it matters. The only honest test of
+"can GitHub publish a new image" is to publish one and look.
+
+Cheapest first:
+
+1. **Free, and asymmetric.** `curl` an asset orphaned by a failed run. A `200` means the
+   pipeline is publishing again. A `404` proves nothing — GitHub may never backfill assets
+   orphaned during the outage — so this can confirm recovery but never rule it out.
+
+   ```bash
+   curl -so /dev/null -w '%{http_code}\n' \
+     https://repository-images.githubusercontent.com/1201444763/a9c7fe1f-2f63-455d-ab22-6f227e9250d0
+   ```
+
+2. **Authoritative.** Publish one and look. Safe to run unattended — if the pipeline is still
+   broken this uploads, detects it, reverts, and exits non-zero. The cost is a window of at
+   most `--serve-timeout` seconds during which one repository unfurls as a broken image.
+
+   ```bash
+   ./scripts/social-preview.sh calvindotsg/mac-upkeep
+   ```
+
+3. **Roll out**, once step 2 prints `serving after Ns` rather than `NOT serving after Ns`:
+
+   ```bash
+   ./scripts/social-preview.sh \
+     calvindotsg/portfolio-v2 calvindotsg/mac-upkeep calvindotsg/granola-to-minutes \
+     calvindotsg/homebrew-tap calvindotsg/.github calvindotsg/calvindotsg
+   ```
 
 ## The design
 
