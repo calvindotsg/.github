@@ -114,6 +114,29 @@ fi
 - The reverse also holds: `cc-menubar` returns 200 with three required checks. Branch protection
   is not a proxy for the security settings, so step 3 is not optional.
 
+## Social Preview Cards
+
+`social-preview/` holds a card template and `scripts/social-preview.sh`, which draws a
+repository's social preview from its own metadata and uploads it. GitHub has no API for that
+setting — description, homepage and topics are all writable over REST, and the one field that
+decides what a link looks like in Slack or on LinkedIn is not — so the script drives the
+Settings page's own upload requests from a signed-in browser pane.
+
+```bash
+./scripts/social-preview.sh --render-only calvindotsg/mac-upkeep   # draw it, change nothing
+./scripts/social-preview.sh calvindotsg/mac-upkeep                 # draw, upload, verify
+./scripts/social-preview.sh --remove calvindotsg/mac-upkeep        # back to GitHub's default
+```
+
+**Not rolled out yet, deliberately.** GitHub's repository-image pipeline has been broken since
+2026-08-21: the upload succeeds and the repository's `og:image` is repointed, but the bytes
+never reach the CDN, so every link unfurls as a *broken* image rather than as GitHub's
+generated card. Verified across four uploads on `portfolio-v2` and then reverted. The cards are
+committed and ready; see [social-preview/README.md](social-preview/README.md) for the protocol,
+the evidence, and how to check whether GitHub has fixed it before running the rollout.
+
+Requires macOS with cmux running, since the upload needs a real authenticated browser session.
+
 ## Related
 
 - **Template repos** (private): scaffold new projects with boilerplate code
