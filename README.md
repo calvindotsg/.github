@@ -27,7 +27,7 @@ Files in this repository are automatically inherited by all `calvindotsg` repos 
 - Auto-delete branches on merge, auto-merge enabled
 - Wiki and Projects disabled
 - Dependabot alerts and security updates
-- Default workflow permissions set to `read`, and Actions barred from approving pull requests
+- Default workflow permissions set to `read`. Whether Actions may **create and approve** pull requests is preserved rather than overwritten, and `ACTIONS_MAY_OPEN_PRS=yes|no` sets it explicitly — one GitHub setting covers both verbs, so forcing it off breaks any workflow that opens its own pull request. That is not hypothetical: it broke `portfolio-v2`'s nightly for two nights. The better fix for such a repo is a GitHub App or PAT for that one call, which this setting does not govern
 - Branch protection (PRs required, enforce admins, no force push) — status check names are set separately, since they vary per CI matrix, and any already configured are preserved on re-run
 
 Public repositories only, because GitHub offers these nowhere else:
