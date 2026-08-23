@@ -13,6 +13,28 @@ LinkedIn. `scripts/social-preview.sh` draws one from the repository's own metada
 preview back, so a committed copy is the only record of what is live — and the only way a change
 to the design shows up as a diff.
 
+`images/dark/` holds the same six drawn with `--theme dark`. **Nothing uploads these** — the
+social preview slot takes one image and it is the light one. They exist because a card is also
+useful inside a README, and a README is rendered in the *reader's* theme: a light-canvas PNG on
+GitHub's dark mode is a glaring white slab. Embed the pair instead, which GitHub supports and
+keeps through its HTML sanitiser (verified: `<picture>`, `<source media>`, `<td width>` and a
+wrapping `<a>` all survive, and GitHub wraps the result in its own `themed-picture` element):
+
+```html
+<picture>
+  <source media="(prefers-color-scheme: dark)"
+          srcset="https://raw.githubusercontent.com/calvindotsg/.github/main/social-preview/images/dark/NAME.png">
+  <img alt="NAME" src="https://raw.githubusercontent.com/calvindotsg/.github/main/social-preview/images/NAME.png">
+</picture>
+```
+
+Consumers link to the raw URLs here rather than committing their own copy, so regenerating a
+card updates every README that shows it. **Give a card the full column width.** Rendered at
+half width in a two-column table it measures ~437px on a desktop and ~180px on a phone, where
+everything below the repository name — description, install chip, language row, topics — stops
+being readable and the card becomes decoration. GitHub's markdown tables do not stack on narrow
+screens, so there is no responsive escape from that.
+
 ## What a card carries that GitHub's generated one does not
 
 GitHub's generated card is good and it is live: owner and repository name, description, owner
