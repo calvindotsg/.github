@@ -54,7 +54,7 @@ it is the reason the card looks the way it does.
 
 **The counters are the interesting row, and they are why the answer here differs from the
 obvious one.** Losing four live counters sounds like the deciding cost, and on a busy account it
-would be. Across the six repositories these cards cover, those counters total **5 stars, 1 fork
+would be. Across the seven repositories these cards cover, those counters total **5 stars, 1 fork
 and 0 open issues**, and four of the six read zero across the board. A quarter of the generated
 card is given over to an empty scoreboard — which is not neutral, because a reader who scans
 `0 · 0 · 0` learns something the repository would rather not lead with. Stars are kept here and
@@ -84,7 +84,7 @@ GitHub computes it with [linguist][linguist], which counts bytes of tracked file
 | `linguist-vendored` | Exclude — code you did not write |
 | `linguist-language=NAME` | Reclassify |
 
-All six repositories were audited against this. **Nothing needed overriding.** No repository
+The first six repositories were audited against this. **Nothing needed overriding.** No repository
 commits build output, nothing is vendored that should not be, and every repository's prose is
 already correctly excluded.
 
