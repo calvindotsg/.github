@@ -128,7 +128,8 @@ from a signed-in browser pane.
 ./scripts/social-preview.sh --remove calvindotsg/mac-upkeep        # back to GitHub's default
 ```
 
-All six public repositories get a card. GitHub's generated card carries four live counters —
+All seven public repositories get a card — `today-mini-app` joined them on 2026-09-01, when it
+was made public. GitHub's generated card carries four live counters —
 contributors, issues, stars, forks — which is the usual reason not to replace it; across these
 repositories those counters total 5 stars, 1 fork and 0 issues, and four of six read zero
 throughout, so a quarter of the generated card is an empty scoreboard. The card here keeps what
