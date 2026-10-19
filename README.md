@@ -125,7 +125,7 @@ a local command. It is public so private repositories can call it. Nothing runs 
 |---|---|---|
 | `gate-command` | string, required | Run from the repository root by both jobs; exit 0 is a pass |
 | `mac-scope` | string | Globs, separated by spaces or newlines, for paths that need macOS. `*` also matches `/` |
-| `fish` | boolean | Puts fish 4.9.3 (the release's static binary, digest-pinned and cached) on PATH in the Linux job |
+| `fish` | boolean | Puts fish on PATH: on Linux 4.9.3, the release's static binary, digest-pinned and cached; on macOS, Homebrew's |
 
 - **`linux`** runs on every call. It runs the gate with `GATE_RUNNER=linux` and decides whether macOS
   is needed: yes on a scheduled or manual run, else only when the PR changes a path in `mac-scope`.

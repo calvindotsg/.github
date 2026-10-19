@@ -33,7 +33,7 @@ on:
         type: string
         default: ""
       fish:
-        description: Put fish on PATH in the Linux job (macOS images already have it).
+        description: Put fish on PATH in both jobs (neither image has it).
         type: boolean
         default: false
 
@@ -150,6 +150,13 @@ jobs:
           ln -sf /usr/bin/python3 "$RUNNER_TEMP/system-python/python3"
           echo "$RUNNER_TEMP/system-python" >> "$GITHUB_PATH"
           /usr/bin/python3 --version
+
+      # The macOS image has no fish (measured 20 Oct); Homebrew's bottle is the quick way there.
+      - name: Install fish
+        if: inputs.fish
+        run: |
+          command -v fish > /dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install --quiet fish
+          fish --version
 
       - name: Gate
         env:
