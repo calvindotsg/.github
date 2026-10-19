@@ -167,7 +167,9 @@ wait forever. `scripts/test-gate-scope.sh [--mutate]` tests the scope step exact
 Calvin when it deletes a tracked file, changes over 1,000 lines outside memory, changes over 20 memory files,
 or adds a line with a secret's shape, or an email, phone number or chat id the base tree does not hold. In CI
 such a change fails until his latest review approves the PR's head commit; one on an older commit is stale.
-Locally the rules are advisory and say the review was skipped. Each repository's `./gate` runs a vendored
+A PR he opened himself fails as `review=self-authored`, since GitHub never counts an author's own review:
+re-open it through `gh-bot`. The reviews are read only from the API's own host, and redirects are not
+followed, so the token goes nowhere else. Locally the rules are advisory and say the review was skipped. Each repository's `./gate` runs a vendored
 copy and fails if that copy's sha256 differs from its pin. `scripts/test-gate-rules.py [--mutate]` has a red
 fixture per rule.
 
