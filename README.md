@@ -140,11 +140,14 @@ A caller, pinned by full SHA. It has no `push` trigger, and its weekly full pass
 name: gate
 on:
   pull_request:
+  pull_request_review:
+    types: [submitted]
   schedule:
     - cron: "17 2 * * 1"
   workflow_dispatch:
 permissions:
   contents: read
+  pull-requests: read
 jobs:
   gate:
     uses: calvindotsg/.github/.github/workflows/gate.yml@<full sha>
@@ -153,9 +156,20 @@ jobs:
       mac-scope: skills/orchestrator/*
 ```
 
-Its checks report as `gate / linux` and `gate / macos`. A macOS job skipped by its `if:` still reports,
+Its checks report as `gate / linux` and `gate / macos`. A submitted review re-runs them, which is how
+Calvin's approval clears a change that needs him (below). A macOS job skipped by its `if:` still reports,
 so both can be required. A workflow `paths:` filter would never report, and a required check would then
 wait forever. `scripts/test-gate-scope.sh [--mutate]` tests the scope step exactly as the workflow has it.
+
+### The needs-Calvin rules
+
+`scripts/gate-rules.py` holds the rules no file path can express (merge-on-green plan 3.4). A change needs
+Calvin when it deletes a tracked file, changes over 1,000 lines outside memory, changes over 20 memory files,
+or adds a line with a secret's shape, or an email, phone number or chat id the base tree does not hold. In CI
+such a change fails until his latest review approves the PR's head commit; one on an older commit is stale.
+Locally the rules are advisory and say the review was skipped. Each repository's `./gate` runs a vendored
+copy and fails if that copy's sha256 differs from its pin. `scripts/test-gate-rules.py [--mutate]` has a red
+fixture per rule.
 
 ## Social Preview Cards
 

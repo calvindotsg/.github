@@ -37,8 +37,10 @@ on:
         type: boolean
         default: false
 
+# pull-requests: read lets gate-rules.py read the PR's reviews when a change needs Calvin (plan 3.4).
 permissions:
   contents: read
+  pull-requests: read
 
 # PR runs share a group per PR, so a new push cancels the old run. Every other run has a group
 # of its own and is never cancelled, so a scheduled pass always finishes.
@@ -130,6 +132,7 @@ jobs:
         env:
           GATE_COMMAND: ${{ inputs.gate-command }}
           GATE_RUNNER: linux
+          GATE_GITHUB_TOKEN: ${{ github.token }}
         run: bash -c "$GATE_COMMAND"
 
   macos:
@@ -162,4 +165,5 @@ jobs:
         env:
           GATE_COMMAND: ${{ inputs.gate-command }}
           GATE_RUNNER: macos
+          GATE_GITHUB_TOKEN: ${{ github.token }}
         run: bash -c "$GATE_COMMAND"
