@@ -82,7 +82,7 @@ IDENTIFIERS = [
     ("phone", re.compile(r"(?<![\w+])\+\d{1,3}[ -]?\d{3,4}[ -]?\d{4}\b|(?<![\w-])[689]\d{3}[ -]\d{4}\b")),
     ("chat id", re.compile(r"(?<![\w-])-100\d{9,13}\b")),
 ]
-# Addresses that identify no one. Each domain is anchored at the end: jane@example.com.evil.sg is someone.
+# Addresses that identify no one. Each domain is anchored at the end: a domain under example.com.evil.sg is someone's.
 SAFE_EMAIL = re.compile(r"^noreply@|(@users\.noreply\.github\.com|@example\.(com|org|net)|\.(test|invalid|example))$", re.I)
 
 
