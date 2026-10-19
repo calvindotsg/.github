@@ -38,3 +38,7 @@ CLAUDE.local.md
 .vscode/
 *~
 *.swp
+
+# --- Python ---
+# The gate's tests import scripts/gate-rules.py, and CPython writes its bytecode cache beside it.
+__pycache__/
