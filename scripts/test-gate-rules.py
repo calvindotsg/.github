@@ -243,6 +243,13 @@ def run_suite(tool: Path) -> None:
         check("a path git quotes is still scanned", "scan hit (1)" in last(p), p.stdout)
         repo, b = r.repo({}, {"f.txt": "a\x0ctoken=" + FAKE_SECRET + "\n"})
         check("a form feed in a line hides nothing", "scan hit (1)" in last(r.run(repo, b)))
+        repo, b = r.repo({}, {"nul.bin": "x\0\ntoken=" + FAKE_SECRET + "\n"})
+        p = r.run(repo, b)
+        check("a file git calls binary is still scanned", "nul.bin:2 github token" in p.stdout, p.stdout + p.stderr)
+        repo, b = r.repo({}, {".gitattributes": "*.txt binary\n", "hid.txt": "token=" + FAKE_SECRET + "\n"})
+        p = r.run(repo, b)
+        check("...and so is one the PR's .gitattributes calls binary", "hid.txt:1 github token" in p.stdout,
+              p.stdout + p.stderr)
 
         print("-- the review, in CI --")
         repo, b = r.repo({"a.txt": "a\n", "b.txt": "b\n"}, {}, delete=("b.txt",))
@@ -311,6 +318,13 @@ def run_suite(tool: Path) -> None:
         check("a redirect is not followed with the token (exit 2)", p.returncode == 2 and len(Api.calls) == 1,
               p.stdout + p.stderr)
         reset_api()
+        for ev_name in ("push", "merge_group", "workflow_dispatch"):
+            p = r.run(repo, b, ci=True, head="H2", GITHUB_EVENT_NAME=ev_name)
+            check(f"a rule firing on a {ev_name} run fails closed (exit 2)",
+                  p.returncode == 2 and "review=undecided" in p.stderr and not Api.calls, p.stdout + p.stderr)
+        repo2, b2 = r.repo({"a.txt": "a\n"}, {"a.txt": "a\nb\n"})
+        p = r.run(repo2, b2, ci=True, GITHUB_EVENT_NAME="push")
+        check("...while a push with nothing to flag passes", p.returncode == 0, p.stdout + p.stderr)
         p = r.run(repo, b, args=("--frobnicate",))
         check("an unknown argument fails closed (exit 2)", p.returncode == 2, p.stderr)
 
@@ -362,6 +376,9 @@ MUTATIONS = [
     ("self-authored passes", "    return 1 if state in (\"missing\", \"stale\", \"self-authored\") else 0",
      "    return 1 if state in (\"missing\", \"stale\") else 0"),
     ("a bad event passes as missing", "TypeError, AttributeError, ", ""),
+    ("binary files skipped", "\"-U0\", \"--text\", ", "\"-U0\", "),
+    ("other CI events pass as local", "    elif event not in (\"pull_request\", \"pull_request_review\"):",
+     "    elif False:"),
     ("unknown argument ignored", "            return 2\n    try:", "            i += 1\n            continue\n    try:"),
 ]
 

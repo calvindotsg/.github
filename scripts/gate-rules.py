@@ -21,7 +21,8 @@ THE REVIEW
     approver's latest review must be APPROVED on the PR's head sha; one on an older sha is stale. It reads
     the reviews with GATE_GITHUB_TOKEN, which needs pull-requests: read and nothing more. A PR the approver
     opened himself is self-authored: GitHub never counts an author's own review, so it says how to proceed.
-    Locally the review is not checked: it prints review=skipped-local and the rules are advisory.
+    Locally the review is not checked: it prints review=skipped-local and the rules are advisory. In Actions
+    under any other event there is no PR to read, so a rule that fires there cannot be decided (exit 2).
 
 EXIT CODES
     0 nothing needs Calvin, or he approved the head, or a local run; 1 needs Calvin and not approved on the
@@ -31,6 +32,7 @@ EXIT CODES
 from __future__ import annotations
 
 import fnmatch
+import http.client
 import json
 import os
 import re
@@ -146,8 +148,9 @@ def rules(base: str, memory: list[str]) -> list[tuple[str, str]]:
         if not path:
             continue
         hunk, n = False, 0
-        for line in git("--literal-pathspecs", "diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames",
-                        base, "HEAD", "--", path).split("\n"):
+        # --text: a file git or the PR's own .gitattributes calls binary is still read line by line.
+        for line in git("--literal-pathspecs", "diff", "-U0", "--text", "--no-textconv", "--no-color", "--no-ext-diff",
+                        "--no-renames", base, "HEAD", "--", path).split("\n"):
             if line.startswith("@@"):
                 m = re.search(r"\+(\d+)", line)
                 hunk, n = True, int(m.group(1)) if m else 0
@@ -233,16 +236,21 @@ def main(argv: list[str]) -> int:
         print(f"needs-calvin=undecided review=not-needed\ngate-rules: {e}", file=sys.stderr)
         return 2
     reasons = "; ".join(r for _, r in hits) or "none"
-    ci = os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_EVENT_NAME") in (
-        "pull_request", "pull_request_review")
+    actions = os.environ.get("GITHUB_ACTIONS") == "true"
+    event = os.environ.get("GITHUB_EVENT_NAME")
     if not hits:
         state = "not-needed"
-    elif not ci:
+    elif not actions:
         state = "skipped-local"
+    elif event not in ("pull_request", "pull_request_review"):
+        print(f"needs-calvin={reasons} review=undecided\ngate-rules: a {event} run has no PR whose review could "
+              "clear this", file=sys.stderr)
+        return 2
     else:
         try:
             state = review(approver)
-        except (OSError, KeyError, TypeError, AttributeError, ValueError, RuntimeError, urllib.error.URLError) as e:
+        except (OSError, KeyError, TypeError, AttributeError, ValueError, RuntimeError, urllib.error.URLError,
+                http.client.HTTPException) as e:
             print(f"needs-calvin={reasons} review=undecided\ngate-rules: cannot read the review: {e}",
                   file=sys.stderr)
             return 2
