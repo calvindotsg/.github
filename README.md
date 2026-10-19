@@ -13,6 +13,8 @@ Files in this repository are automatically inherited by all `calvindotsg` repos 
 | `.github/ISSUE_TEMPLATE/bug_report.yml` | Generic bug report form |
 | `.github/ISSUE_TEMPLATE/feature_request.yml` | Generic feature request form |
 
+Not inherited, but called: `.github/workflows/gate.yml`, the [shared gate workflow](#shared-gate-workflow).
+
 ## Override Behavior
 
 - **PR template**: A repo's own `.github/PULL_REQUEST_TEMPLATE.md` takes precedence.
@@ -113,6 +115,63 @@ fi
   stricter than the script's own baseline, and invisible to a check that only looks at step 1.
 - The reverse also holds: `cc-menubar` returns 200 with three required checks. Branch protection
   is not a proxy for the security settings, so step 3 is not optional.
+
+## Shared Gate Workflow
+
+`.github/workflows/gate.yml` is a reusable workflow: the one CI shape for repositories whose merge gate is
+a local command. It is public so private repositories can call it. Nothing runs here.
+
+| Input | Type | Meaning |
+|---|---|---|
+| `gate-command` | string, required | Run from the repository root by both jobs; exit 0 is a pass |
+| `mac-scope` | string | Globs, separated by spaces or newlines, for paths that need macOS. `*` also matches `/` |
+| `fish` | boolean | Puts fish on PATH: on Linux 4.9.3, the release's static binary, digest-pinned and cached; on macOS, Homebrew's |
+
+- **`linux`** runs on every call. It runs the gate with `GATE_RUNNER=linux` and decides whether macOS
+  is needed: yes on a scheduled or manual run, else only when the PR changes a path in `mac-scope`.
+- **`macos`** has `needs: linux` and a job-level `if:`. It runs the gate with `GATE_RUNNER=macos`,
+  with `python3` pointed at `/usr/bin/python3`, since the image puts Homebrew's Python first.
+- Built in: `contents: read`, actions pinned by full SHA, timeouts of 5 (Linux) and 10 (macOS)
+  minutes, and a concurrency group that cancels a superseded PR run and never a scheduled one.
+
+A caller, pinned by full SHA. It has no `push` trigger, and its weekly full pass is off the hour:
+
+```yaml
+name: gate
+on:
+  pull_request:
+  pull_request_review:
+    types: [submitted]
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  gate:
+    uses: calvindotsg/.github/.github/workflows/gate.yml@<full sha>
+    with:
+      gate-command: ./gate
+      mac-scope: skills/orchestrator/*
+```
+
+Its checks report as `gate / linux` and `gate / macos`. A submitted review re-runs them, which is how
+Calvin's approval clears a change that needs him (below). A macOS job skipped by its `if:` still reports,
+so both can be required. A workflow `paths:` filter would never report, and a required check would then
+wait forever. `scripts/test-gate-scope.sh [--mutate]` tests the scope step exactly as the workflow has it.
+
+### The needs-Calvin rules
+
+`scripts/gate-rules.py` holds the rules no file path can express (merge-on-green plan 3.4). A change needs
+Calvin when it deletes a tracked file, changes over 1,000 lines outside memory, changes over 20 memory files,
+or adds a line with a secret's shape, or an email, phone number or chat id the base tree does not hold. In CI
+such a change fails until his latest review approves the PR's head commit; one on an older commit is stale.
+A PR he opened himself fails as `review=self-authored`, since GitHub never counts an author's own review:
+re-open it through `gh-bot`. The reviews are read only from the API's own host, and redirects are not
+followed, so the token goes nowhere else. Locally the rules are advisory and say the review was skipped. Each repository's `./gate` runs a vendored
+copy and fails if that copy's sha256 differs from its pin. `scripts/test-gate-rules.py [--mutate]` has a red
+fixture per rule.
 
 ## Social Preview Cards
 
