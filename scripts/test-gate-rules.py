@@ -230,6 +230,10 @@ def run_suite(tool: Path) -> None:
         check("a secret the base already holds still needs Calvin", "scan hit" in last(r.run(repo, b)))
         repo, b = r.repo({}, {"b.md": "ann@host.test, bob@x.invalid, eve@example.org\n"})
         check(".test, .invalid and example addresses do not", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo({}, {"b.md": "jane@example.com.evil.sg\n"})
+        check("a look-alike example domain needs Calvin", "scan hit (1)" in last(r.run(repo, b)))
+        repo, b = r.repo({}, {"b.md": "bob@users.noreply.github.com.evil.io\n"})
+        check("...and a look-alike noreply domain", "scan hit (1)" in last(r.run(repo, b)))
         repo, b = r.repo({"c.txt": "1\nold\n3\n"}, {"c.txt": "1\nnew\ntoken=" + FAKE_SECRET + "\n3\n"})
         p = r.run(repo, b)
         check("a hit is named by its new-file line number", "c.txt:3 github token" in p.stdout, p.stdout)
@@ -360,7 +364,8 @@ MUTATIONS = [
     ("renames detected", "\"-z\", \"--no-renames\", \"--diff-filter=D\"", "\"-z\", \"--find-renames\", \"--diff-filter=D\""),
     ("secrets excused like identifiers", "                if rx.search(text):\n                    found",
      "                if rx.search(text) and not in_base(base, rx.search(text).group(0)):\n                    found"),
-    ("safe emails widened to every .test-less address", "\\.(test|invalid|example)$", "\\.(test|invalid|example|sg)$"),
+    ("safe emails widened to every .test-less address", "\\.(test|invalid|example))$", "\\.(test|invalid|example|sg))$"),
+    ("safe domains unanchored", "|\\.(test|invalid|example))$\", re.I)", "|\\.(test|invalid|example)$)\", re.I)"),
     ("line numbers count removed lines", "            if not hunk or not line.startswith(\"+\"):\n                continue",
      "            if not hunk or not line.startswith(\"+\"):\n                n += line.startswith(\"-\")\n                continue"),
     ("scan reads the header lines", "            if not hunk or not line.startswith(\"+\"):",
