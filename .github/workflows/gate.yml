@@ -1,0 +1,158 @@
+# The shared merge gate. A repository calls this with its own gate command; it is not run here.
+#
+# One Linux job runs every portable check on each PR and decides whether the macOS job is
+# needed. The macOS job runs only when the PR touches a Mac path (`mac-scope`), or on a
+# scheduled or manual run, which is the weekly full pass. Both jobs run the same command, with
+# GATE_RUNNER=linux or macos so the gate can pick the checks each platform can run.
+#
+# The macOS job is skipped by a job-level `if:` after `needs:`, never by a workflow `paths:`
+# filter: a filtered workflow never reports, so a required check would wait forever, while a
+# skipped job reports and lets the PR merge.
+#
+# Caller, pinned by full SHA (README.md has the whole file):
+#   jobs:
+#     gate:
+#       uses: calvindotsg/.github/.github/workflows/gate.yml@<sha>
+#       with:
+#         gate-command: ./gate
+#         mac-scope: skills/orchestrator/*
+name: gate
+
+on:
+  workflow_call:
+    inputs:
+      gate-command:
+        description: Command both jobs run from the repository root; exit 0 means pass.
+        type: string
+        required: true
+      mac-scope:
+        description: >-
+          Globs, separated by spaces or newlines, for paths whose change needs the macOS job.
+          `*` also matches `/`, so `skills/orchestrator/*` covers the whole tree. Empty: macOS
+          runs only on scheduled and manual runs.
+        type: string
+        default: ""
+      fish:
+        description: Put fish on PATH in the Linux job (macOS images already have it).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# PR runs share a group per PR, so a new push cancels the old run. Every other run has a group
+# of its own and is never cancelled, so a scheduled pass always finishes.
+concurrency:
+  group: gate-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FISH_VERSION: 4.9.3
+  FISH_SHA256: 8f643d10ad1abb0ef7072764c01ceb5cf61b2d373fda400cf60f0bad69b7e095
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mac: ${{ steps.scope.outputs.mac }}
+    steps:
+      # Depth 2: on a PR the checkout is GitHub's merge commit, and its first parent is the base,
+      # so HEAD^1..HEAD is exactly what the PR changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - id: scope
+        name: Decide whether macOS runs
+        env:
+          EVENT: ${{ github.event_name }}
+          MAC_SCOPE: ${{ inputs.mac-scope }}
+        run: |
+          # scope:begin
+          set -euo pipefail
+          set -f   # the globs are patterns to match, never to expand against the tree
+          mac=false
+          why=""
+          case "$EVENT" in
+            schedule|workflow_dispatch)
+              mac=true; why="$EVENT run: full pass" ;;
+            *)
+              if [ -z "${MAC_SCOPE//[[:space:]]/}" ]; then
+                why="no mac-scope"
+              elif ! changed=$(git diff --name-only HEAD^1 HEAD 2>/dev/null); then
+                # Unknown change set: run macOS rather than skip a check that might matter.
+                mac=true; why="could not list changed files"
+              else
+                while IFS= read -r f; do
+                  [ -n "$f" ] || continue
+                  for g in $MAC_SCOPE; do
+                    # shellcheck disable=SC2053 # $g is a pattern on purpose
+                    if [[ $f == $g ]]; then mac=true; why="$f matches $g"; break 2; fi
+                  done
+                done <<< "$changed"
+                [ "$mac" = true ] || why="no changed path matches mac-scope"
+              fi ;;
+          esac
+          echo "mac=$mac" >> "$GITHUB_OUTPUT"
+          echo "macOS job: $mac ($why)"
+          # scope:end
+
+      - name: Restore fish
+        if: inputs.fish
+        id: fish-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/fish/${{ env.FISH_VERSION }}
+          key: fish-${{ env.FISH_VERSION }}-linux-x86_64-${{ env.FISH_SHA256 }}
+
+      # The release's static binary, checked against its pinned digest: about 1 s, where apt
+      # took 55 s.
+      - name: Install fish
+        if: inputs.fish && steps.fish-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TOOL_CACHE/fish/$FISH_VERSION/bin"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/fish.tar.xz" \
+            "https://github.com/fish-shell/fish-shell/releases/download/$FISH_VERSION/fish-$FISH_VERSION-linux-x86_64.tar.xz"
+          echo "$FISH_SHA256  $RUNNER_TEMP/fish.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/fish.tar.xz" -C "$dir" fish
+
+      - name: Put fish on PATH
+        if: inputs.fish
+        run: |
+          echo "$RUNNER_TOOL_CACHE/fish/$FISH_VERSION/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TOOL_CACHE/fish/$FISH_VERSION/bin/fish" --version
+
+      - name: Gate
+        env:
+          GATE_COMMAND: ${{ inputs.gate-command }}
+          GATE_RUNNER: linux
+        run: bash -c "$GATE_COMMAND"
+
+  macos:
+    needs: linux
+    if: needs.linux.outputs.mac == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The image puts Homebrew's Python first on PATH; a Mac runs these suites with the system
+      # /usr/bin/python3, so `python3` is pointed back at it.
+      - name: Use the system python3
+        run: |
+          mkdir -p "$RUNNER_TEMP/system-python"
+          ln -sf /usr/bin/python3 "$RUNNER_TEMP/system-python/python3"
+          echo "$RUNNER_TEMP/system-python" >> "$GITHUB_PATH"
+          /usr/bin/python3 --version
+
+      - name: Gate
+        env:
+          GATE_COMMAND: ${{ inputs.gate-command }}
+          GATE_RUNNER: macos
+        run: bash -c "$GATE_COMMAND"

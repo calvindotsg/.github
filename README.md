@@ -13,6 +13,8 @@ Files in this repository are automatically inherited by all `calvindotsg` repos 
 | `.github/ISSUE_TEMPLATE/bug_report.yml` | Generic bug report form |
 | `.github/ISSUE_TEMPLATE/feature_request.yml` | Generic feature request form |
 
+Not inherited, but called: `.github/workflows/gate.yml`, the [shared gate workflow](#shared-gate-workflow).
+
 ## Override Behavior
 
 - **PR template**: A repo's own `.github/PULL_REQUEST_TEMPLATE.md` takes precedence.
@@ -113,6 +115,47 @@ fi
   stricter than the script's own baseline, and invisible to a check that only looks at step 1.
 - The reverse also holds: `cc-menubar` returns 200 with three required checks. Branch protection
   is not a proxy for the security settings, so step 3 is not optional.
+
+## Shared Gate Workflow
+
+`.github/workflows/gate.yml` is a reusable workflow: the one CI shape for repositories whose merge gate is
+a local command. It is public so private repositories can call it. Nothing runs here.
+
+| Input | Type | Meaning |
+|---|---|---|
+| `gate-command` | string, required | Run from the repository root by both jobs; exit 0 is a pass |
+| `mac-scope` | string | Globs, separated by spaces or newlines, for paths that need macOS. `*` also matches `/` |
+| `fish` | boolean | Puts fish 4.9.3 (the release's static binary, digest-pinned and cached) on PATH in the Linux job |
+
+- **`linux`** runs on every call. It runs the gate with `GATE_RUNNER=linux` and decides whether macOS
+  is needed: yes on a scheduled or manual run, else only when the PR changes a path in `mac-scope`.
+- **`macos`** has `needs: linux` and a job-level `if:`. It runs the gate with `GATE_RUNNER=macos`,
+  with `python3` pointed at `/usr/bin/python3`, since the image puts Homebrew's Python first.
+- Built in: `contents: read`, actions pinned by full SHA, timeouts of 5 (Linux) and 10 (macOS)
+  minutes, and a concurrency group that cancels a superseded PR run and never a scheduled one.
+
+A caller, pinned by full SHA. It has no `push` trigger, and its weekly full pass is off the hour:
+
+```yaml
+name: gate
+on:
+  pull_request:
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gate:
+    uses: calvindotsg/.github/.github/workflows/gate.yml@<full sha>
+    with:
+      gate-command: ./gate
+      mac-scope: skills/orchestrator/*
+```
+
+Its checks report as `gate / linux` and `gate / macos`. A macOS job skipped by its `if:` still reports,
+so both can be required. A workflow `paths:` filter would never report, and a required check would then
+wait forever. `scripts/test-gate-scope.sh [--mutate]` tests the scope step exactly as the workflow has it.
 
 ## Social Preview Cards
 
