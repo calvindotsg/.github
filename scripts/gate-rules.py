@@ -82,8 +82,10 @@ IDENTIFIERS = [
     ("phone", re.compile(r"(?<![\w+])\+\d{1,3}[ -]?\d{3,4}[ -]?\d{4}\b|(?<![\w-])[689]\d{3}[ -]\d{4}\b")),
     ("chat id", re.compile(r"(?<![\w-])-100\d{9,13}\b")),
 ]
-# Addresses that identify no one. Each domain is anchored at the end: a domain under example.com.evil.sg is someone's.
-SAFE_EMAIL = re.compile(r"^noreply@|(@users\.noreply\.github\.com|@example\.(com|org|net)|\.(test|invalid|example))$", re.I)
+# Addresses that identify no one. Each domain is anchored at the end: a domain under example.com.evil.sg is someone's,
+# and so is noreply@ at any domain not named here.
+SAFE_EMAIL = re.compile(r"(^noreply@(anthropic\.com|github\.com)|@users\.noreply\.github\.com|@example\.(com|org|net)"
+                        r"|\.(test|invalid|example))$", re.I)
 
 
 def git(*args: str) -> str:
@@ -110,8 +112,11 @@ def is_memory(path: str, globs: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(path, g) for g in globs)
 
 
-def in_base(base: str, needle: str) -> bool:
-    return subprocess.run(["git", "grep", "-q", "-F", "-e", needle, base, "--"], capture_output=True).returncode == 0
+def in_base(base: str, rx: re.Pattern, needle: str) -> bool:
+    """True if the base holds needle as a whole identifier: rx finds exactly it on some base line, not a longer one."""
+    p = subprocess.run(["git", "grep", "-h", "-F", "-e", needle, base, "--"], capture_output=True, text=True,
+                       errors="replace")
+    return p.returncode == 0 and any(m.group(0) == needle for line in p.stdout.split("\n") for m in rx.finditer(line))
 
 
 def rules(base: str, memory: list[str]) -> list[tuple[str, str]]:
@@ -165,7 +170,7 @@ def rules(base: str, memory: list[str]) -> list[tuple[str, str]]:
                     value = m.group(0)
                     if kind == "email" and SAFE_EMAIL.search(value):
                         continue
-                    if not in_base(base, value):
+                    if not in_base(base, rx, value):
                         found.append(f"{path}:{n} new {kind}")
             n += 1
     print(f"rule scan: {len(found)} hit(s)" + "".join(f"\n  {f}" for f in found[:20]))
