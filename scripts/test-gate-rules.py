@@ -215,8 +215,14 @@ def run_suite(tool: Path) -> None:
         check("a new email needs Calvin", "scan hit" in last(r.run(repo, b)))
         repo, b = r.repo({"a.txt": "jane.doe@corp.sg\n"}, {"b.md": "jane.doe@corp.sg again\n"})
         check("an email the base already holds does not", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo({"a.txt": "ajane.doe@corp.sg, jane.doe@corp.sg.au\n"}, {"b.md": "jane.doe@corp.sg\n"})
+        check("an email the base holds only inside a longer one needs Calvin (F5)", "scan hit (1)" in last(r.run(repo, b)))
         repo, b = r.repo({}, {"b.md": "68703834+calvindotsg@users.noreply.github.com, noreply@anthropic.com\n"})
         check("noreply addresses do not", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo({}, {"b.md": "noreply@corp.sg\n"})
+        check("noreply@ at any other domain needs Calvin (F9)", "scan hit (1)" in last(r.run(repo, b)))
+        repo, b = r.repo({}, {"b.md": "noreply@anthropic.com.evil.sg\n"})
+        check("...and a look-alike of a safe noreply domain", "scan hit (1)" in last(r.run(repo, b)))
         repo, b = r.repo({}, {"b.md": "call +65 9123 4567\n"})
         check("a new phone number needs Calvin", "scan hit" in last(r.run(repo, b)))
         repo, b = r.repo({}, {"b.md": "chat -1001234567890\n"})
@@ -347,7 +353,7 @@ MUTATIONS = [
     ("memory limit off by one", "    if mem > MAX_MEMORY:", "    if mem >= MAX_MEMORY:"),
     ("secret scan off", "                if rx.search(text):\n                    found.append",
      "                if False:\n                    found.append"),
-    ("identifiers in the base not excused", "                    if not in_base(base, value):",
+    ("identifiers in the base not excused", "                    if not in_base(base, rx, value):",
      "                    if True:"),
     ("removed lines scanned too", "            if not hunk or not line.startswith(\"+\"):",
      "            if not hunk or line.startswith(\"@\"):"),
@@ -384,7 +390,9 @@ MUTATIONS = [
     ("binary files skipped", "\"-U0\", \"--text\", ", "\"-U0\", "),
     ("other CI events pass as local", "    elif event not in (\"pull_request\", \"pull_request_review\"):",
      "    elif False:"),
-    ("unknown argument ignored", "            return 2\n    try:", "            i += 1\n            continue\n    try:"),
+    ("noreply@ at any domain (F9)", "(^noreply@(anthropic\\.com|github\\.com)|", "(^noreply@|"),
+    ("base match by substring (F5)", "    return p.returncode == 0 and any(", "    return p.returncode == 0 or any("),
+    ("unknown argument ignored","            return 2\n    try:", "            i += 1\n            continue\n    try:"),
 ]
 
 
