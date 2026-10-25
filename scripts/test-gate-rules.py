@@ -132,7 +132,8 @@ class Rig:
                         "GITHUB_REPOSITORY": "calvindotsg/x", "GATE_GITHUB_TOKEN": "fake-token",
                         "GATE_GITHUB_API": f"http://127.0.0.1:{self.server.server_address[1]}"})
         env.update(extra)
-        return subprocess.run([sys.executable, str(self.tool), "--base", base, *args], cwd=repo, env=env,
+        return subprocess.run([sys.executable, str(self.tool), *(["--base", base] if base is not None else []), *args],
+                              cwd=repo, env=env,
                               capture_output=True, text=True, timeout=60)
 
     def close(self):
@@ -160,6 +161,46 @@ def api_seen(tool: Path, value: str) -> str:
             del os.environ["GATE_GITHUB_API"]
         else:
             os.environ["GATE_GITHUB_API"] = old
+
+
+def merges(r: Rig) -> tuple[Path, Path, str]:
+    """Two repos sharing one shape (F12). main: base B, then M deletes gone.txt. Branch feat: B, then F edits a.txt.
+    `local` checks out a feat head that merged main: parents F, M; its HEAD^1 is the old branch tip, so a base of
+    HEAD^1 counts main's deletion. `pr` is GitHub's checkout: a detached merge whose parents are M, F, with no main
+    ref left, so only HEAD^1 can give the base. Returns (local, pr, F's sha)."""
+    out = []
+    for kind in ("local", "pr"):
+        d = r.dir / f"m-{kind}"
+        d.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(d), *a], capture_output=True, text=True, check=True).stdout
+        g("init", "-q", "-b", "main")
+        g("config", "user.email", "t@example.com")
+        g("config", "user.name", "t")
+        (d / "a.txt").write_text("a\n")
+        (d / "gone.txt").write_text("g\n")
+        g("add", "-A")
+        g("commit", "-qm", "base")
+        g("checkout", "-qb", "feat")
+        (d / "a.txt").write_text("a\nb\n")
+        g("commit", "-qam", "feature")
+        f = g("rev-parse", "HEAD").strip()
+        g("checkout", "-q", "main")
+        g("rm", "-q", "gone.txt")
+        g("commit", "-qm", "main moves on")
+        if kind == "local":
+            g("checkout", "-q", "feat")
+            g("merge", "-q", "--no-ff", "-m", "merge main", "main")
+        else:
+            g("merge", "-q", "--no-ff", "-m", "GitHub's merge", "feat")
+            g("checkout", "-q", "--detach")
+            g("branch", "-qD", "main", "feat")
+        out.append(d)
+    return out[0], out[1], f
+
+
+def commit_all(repo: Path) -> None:
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "more"], check=True, capture_output=True)
 
 
 def run_suite(tool: Path) -> None:
@@ -261,6 +302,25 @@ def run_suite(tool: Path) -> None:
         check("...and so is one the PR's .gitattributes calls binary", "hid.txt:1 github token" in p.stdout,
               p.stdout + p.stderr)
 
+        print("-- bytes that are not UTF-8 (F7) --")
+        repo, b = r.repo({"a.txt": "a\n"}, {})
+        (repo / "font.woff2").write_bytes(b"wOF2\x88\xff\x00\x9c\ntoken=" + FAKE_SECRET.encode() + b"\n")
+        commit_all(repo)
+        p = r.run(repo, b)
+        check("a font's non-UTF-8 bytes neither crash the run nor hide a secret",
+              p.returncode == 0 and "font.woff2:2 github token" in p.stdout, p.stdout + p.stderr)
+        repo, b = r.repo({"a.txt": "a\n"}, {})
+        odd = b"caf\xe9-\x88.txt"   # latin-1, not UTF-8: git keeps such a name as bytes
+        blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"], capture_output=True, check=True,
+                              input=b"token=" + FAKE_SECRET.encode() + b"\n").stdout.strip()
+        subprocess.run([b"git", b"-C", str(repo).encode(), b"update-index", b"--add", b"--cacheinfo",
+                        b"100644," + blob + b"," + odd], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "odd name"], check=True, capture_output=True)
+        p = r.run(repo, b, PYTHONIOENCODING="utf-8:strict")   # stdout as in CI (LANG=C.UTF-8), not the C locale's escapes
+        check("a file whose name is not UTF-8 is still scanned, and its name printed escaped",
+              p.returncode == 0 and "github token" in p.stdout and "scan hit (1)" in last(p) and "Traceback" not in p.stderr,
+              p.stdout + p.stderr)
+
         print("-- the review, in CI --")
         repo, b = r.repo({"a.txt": "a\n", "b.txt": "b\n"}, {}, delete=("b.txt",))
         cal = {"login": "calvindotsg"}
@@ -338,6 +398,43 @@ def run_suite(tool: Path) -> None:
         p = r.run(repo, b, args=("--frobnicate",))
         check("an unknown argument fails closed (exit 2)", p.returncode == 2, p.stderr)
 
+        print("-- the default base (F12) --")
+        local, pr, f = merges(r)
+        p = r.run(local, None)
+        check("a local head that merged main is measured from the merge-base, not its old tip",
+              p.returncode == 0 and "rule deleted: 0" in p.stdout and last(p) == "needs-calvin=none review=not-needed",
+              p.stdout + p.stderr)
+        p = r.run(local, None, GITHUB_EVENT_NAME="pull_request")
+        check("...and a PR event name outside Actions changes nothing", p.returncode == 0 and "rule deleted: 0" in p.stdout,
+              p.stdout + p.stderr)
+        p = r.run(local, None, ci=True, head="H", GITHUB_EVENT_NAME="push")
+        check("...nor a non-PR event in Actions: merge-base", p.returncode == 0 and "rule deleted: 0" in p.stdout,
+              p.stdout + p.stderr)
+        for ev_name in ("pull_request", "pull_request_review"):
+            p = r.run(pr, None, ci=True, head=f, GITHUB_EVENT_NAME=ev_name)
+            check(f"GitHub's {ev_name} merge of the event's head is measured from HEAD^1",
+                  p.returncode == 0 and "rule deleted: 0" in p.stdout and "changed outside memory" in p.stdout,
+                  p.stdout + p.stderr)
+        p = r.run(pr, None, ci=True, head="0" * 40)
+        check("a merge of some other head fails closed (exit 2, pass --base)",
+              p.returncode == 2 and "pass --base" in p.stderr and "rule " not in p.stdout, p.stdout + p.stderr)
+        p = r.run(local, None, ci=True, head=f)
+        check("a PR event whose HEAD is a merged-main branch head fails closed (exit 2)",
+              p.returncode == 2 and "pass --base" in p.stderr, p.stdout + p.stderr)
+        repo, b = r.repo({"a.txt": "a\n"}, {"a.txt": "a\nb\n"})
+        p = r.run(repo, None, ci=True, head="H")
+        check("a PR event on a one-parent HEAD fails closed (exit 2)",
+              p.returncode == 2 and "pass --base" in p.stderr, p.stdout + p.stderr)
+        p = r.run(pr, None, ci=True, event={"pull_request": {"number": 7}})
+        check("an event with no head sha fails closed (exit 2)",
+              p.returncode == 2 and "pass --base" in p.stderr, p.stdout + p.stderr)
+        p = r.run(pr, None, ci=True, head=f, GITHUB_EVENT_PATH=str(r.dir / "no-such-event.json"))
+        check("an event file that cannot be read fails closed (exit 2)",
+              p.returncode == 2 and "pass --base" in p.stderr, p.stdout + p.stderr)
+        p = r.run(local, "main", ci=True, head="H")
+        check("an explicit --base is used as given, in CI too", p.returncode == 0 and "rule deleted: 0" in p.stdout,
+              p.stdout + p.stderr)
+
         print("-- the base --")
         p = subprocess.run([sys.executable, str(tool), "--base", "no-such-rev"], cwd=repo, capture_output=True,
                            text=True, env={"PATH": "/usr/bin:/bin"})
@@ -393,6 +490,19 @@ MUTATIONS = [
     ("noreply@ at any domain (F9)", "(^noreply@(anthropic\\.com|github\\.com)|", "(^noreply@|"),
     ("base match by substring (F5)", "    return p.returncode == 0 and any(", "    return p.returncode == 0 or any("),
     ("unknown argument ignored","            return 2\n    try:", "            i += 1\n            continue\n    try:"),
+    ("any 2-parent HEAD is the PR merge (F12)", "        parents = git(\"rev-list\", \"--parents\", \"-n\", \"1\", \"HEAD\").split()\n        if len",
+     "        pass\n    parents = git(\"rev-list\", \"--parents\", \"-n\", \"1\", \"HEAD\").split()\n    if len(parents) == 3:\n        return parents[1]\n    if True:\n        if len"),
+    ("HEAD^1 outside Actions (F12)", "    if os.environ.get(\"GITHUB_ACTIONS\") == \"true\" and os.environ.get(\"GITHUB_EVENT_NAME\")",
+     "    if os.environ.get(\"GITHUB_EVENT_NAME\")"),
+    ("HEAD^1 under any CI event (F12)", "    if os.environ.get(\"GITHUB_ACTIONS\") == \"true\" and os.environ.get(\"GITHUB_EVENT_NAME\") in (\n            \"pull_request\", \"pull_request_review\"):",
+     "    if os.environ.get(\"GITHUB_ACTIONS\") == \"true\":"),
+    ("review events not read as PR merges (F12)", "in (\n            \"pull_request\", \"pull_request_review\"):", "in (\n            \"pull_request\",):"),
+    ("HEAD^2 not checked (F12)", "if len(parents) == 3 and parents[2] == head:", "if len(parents) == 3:"),
+    ("git output decoded strictly (F7)", "encoding=\"utf-8\", errors=\"surrogateescape\")", "encoding=\"utf-8\")"),
+    ("odd bytes replaced, not carried (F7)", "encoding=\"utf-8\", errors=\"surrogateescape\")",
+     "encoding=\"utf-8\", errors=\"replace\")"),
+    ("odd path printed strictly (F7)", "    sys.stdout.reconfigure(errors=\"backslashreplace\")", "    pass"),
+    ("a non-merge guessed from the merge-base (F12)", "        raise RuntimeError(\"HEAD is not GitHub's merge of this PR's head: pass --base\")\n", ""),
 ]
 
 
