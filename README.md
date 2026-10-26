@@ -165,7 +165,9 @@ wait forever. `scripts/test-gate-scope.sh [--mutate]` tests the scope step exact
 
 `scripts/gate-rules.py` holds the rules no file path can express (merge-on-green plan 3.4). A change needs
 Calvin when it deletes a tracked file, changes over 1,000 lines outside memory, changes over 20 memory files,
-or adds a line with a secret's shape, or an email, phone number or chat id the base tree does not hold. In CI
+or adds a line with a secret's shape, or an email, phone number or chat id the base tree does not hold. Binary
+files count as 0 lines, so the `binaries` line lists each one with its size in bytes (or "deleted"), with no
+limit and no effect on the verdict. In CI
 such a change fails until his latest review approves the PR's head commit; one on an older commit is stale.
 A PR he opened himself fails as `review=self-authored`, since GitHub never counts an author's own review:
 re-open it through `gh-bot`. The reviews are read only from the API's own host, and redirects are not

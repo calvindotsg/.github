@@ -105,13 +105,13 @@ class Rig:
         g("config", "user.name", "t")
         for p, text in base.items():
             (r / p).parent.mkdir(parents=True, exist_ok=True)
-            (r / p).write_text(text)
+            (r / p).write_bytes(text) if isinstance(text, bytes) else (r / p).write_text(text)
         g("add", "-A")
         g("commit", "-qm", "base", "--allow-empty")
         b = g("rev-parse", "HEAD").stdout.strip()
         for p, text in change.items():
             (r / p).parent.mkdir(parents=True, exist_ok=True)
-            (r / p).write_text(text)
+            (r / p).write_bytes(text) if isinstance(text, bytes) else (r / p).write_text(text)
         for p in delete:
             (r / p).unlink()
         for old, new in move:
@@ -239,6 +239,22 @@ def run_suite(tool: Path) -> None:
         check("1,000 do not", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
         repo, b = r.repo({}, {"projects/p/memory/m.md": "x\n" * 1500})
         check("memory lines are not counted", "changed lines" not in last(r.run(repo, b)))
+
+        print("-- binaries --")
+        png = b"\x89PNG\r\n\x1a\n\x00" * 50000
+        repo, b = r.repo({"old.bin": b"\x00\x01" * 10}, {"img/big.png": png, "new.bin": b"\x00" * 7}, delete=("old.bin",))
+        p = r.run(repo, b)
+        check("a binary is listed with its size", f"rule binaries: img/big.png {len(png)} bytes\n" in p.stdout, p.stdout)
+        check("...a deleted one as deleted", "rule binaries: old.bin deleted\n" in p.stdout, p.stdout)
+        check("...with a count line", "rule binaries: 3 binary file(s), listed with no limit" in p.stdout, p.stdout)
+        check("...and no limit: a 450 KB binary fires nothing new", "binary" not in last(p) and "changed lines" not in last(p),
+              last(p))
+        repo, b = r.repo({"a.txt": "a\n"}, {"b.txt": "b\n"})
+        check("no binary: count is 0", "rule binaries: 0 binary file(s)" in r.run(repo, b).stdout)
+        repo, b = r.repo({}, {"c.bin": b"\x00" * 5})
+        p = r.run(repo, b)
+        check("a lone binary leaves needs-calvin=none", last(p) == "needs-calvin=none review=not-needed", p.stdout)
+        check("...and its bytes are never printed", "\x00" not in p.stdout, repr(p.stdout))
 
         print("-- memory --")
         repo, b = r.repo({}, {f"projects/p/memory/m{i}.md": "x\n" for i in range(21)})
@@ -444,6 +460,8 @@ def run_suite(tool: Path) -> None:
 
 
 MUTATIONS = [
+    ("binaries not listed", "            binaries.append(f", "            pass  # "),
+    ("binary size wrong", "'cat-file', '-s'", "'cat-file', '-t'"),
     ("deletes ignored", "    if deleted:\n        hits.append", "    if False:\n        hits.append"),
     ("line limit off by one", "    if lines > MAX_LINES:", "    if lines >= MAX_LINES:"),
     ("memory counted in lines", "            mem += 1\n            continue\n", "            mem += 1\n"),
