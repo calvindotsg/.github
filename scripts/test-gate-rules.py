@@ -318,6 +318,60 @@ def run_suite(tool: Path) -> None:
         check("...and so is one the PR's .gitattributes calls binary", "hid.txt:1 github token" in p.stdout,
               p.stdout + p.stderr)
 
+        print("-- codeowners (plan 3.4 file paths; miss 2026-11-20-merged-past-3.4-01) --")
+        co = ("# plan 3.4\n.github/ @calvindotsg\n/gate @calvindotsg\nscripts/gate* @calvindotsg\nscripts/gate/ @calvindotsg\n"
+              "skills/orchestrator/scripts/test_*.sh @calvindotsg\nsettings.json @calvindotsg\nBrewfile @calvindotsg\n")
+        orch = {".github/CODEOWNERS": co, "skills/orchestrator/scripts/test_orch.sh": "a\n", "docs/a.md": "a\n",
+                "gate": "g\n", "scripts/gate/gate-rules.py": "r\n"}
+        repo, b = r.repo(orch, {"skills/orchestrator/scripts/test_orch.sh": "a\nb\n"})
+        p = r.run(repo, b)
+        check("RED: a change to a test runner the gate calls needs Calvin (the miss)",
+              last(p) == "needs-calvin=codeowners: 1 path(s) (skills/orchestrator/scripts/test_orch.sh) "
+                         "review=skipped-local", p.stdout + p.stderr)
+        check("...listed under the rule with its CODEOWNERS file",
+              "rule codeowners: 1 changed path(s) owned by @calvindotsg in .github/CODEOWNERS at HEAD and "
+              ".github/CODEOWNERS at base\n  skills/orchestrator/scripts/test_orch.sh" in p.stdout, p.stdout)
+        p = r.run(repo, b, ci=True, head="headsha")
+        check("...and in CI fails until he approves the head (exit 1)", p.returncode == 1 and "review=missing" in last(p),
+              p.stdout + p.stderr)
+        repo, b = r.repo(orch, {"docs/a.md": "a\nb\n"})
+        check("GREEN: a docs-only change needs no one", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(orch, {"gate": "g2\n", "scripts/gate/gate-rules.py": "r2\n", "scripts/gate_lock.sh": "l\n"})
+        check("the gate, the rules copy and a new scripts/gate* file all count",
+              "codeowners: 3 path(s)" in last(r.run(repo, b)))
+        repo, b = r.repo(orch, {"x/gate": "g\n"})
+        check("an anchored /gate does not match x/gate", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(orch, {"sub/Brewfile": "b\n"})
+        check("a pattern with no slash matches at any depth", "codeowners: 1 path(s) (sub/Brewfile)" in last(r.run(repo, b)))
+        repo, b = r.repo(orch, {".github/CODEOWNERS": "docs/ @calvindotsg\n",
+                                "skills/orchestrator/scripts/test_orch.sh": "a\nb\n"})
+        check("a PR cannot drop its own path: the base's CODEOWNERS still holds it",
+              "skills/orchestrator/scripts/test_orch.sh" in last(r.run(repo, b)))
+        repo, b = r.repo({"a.txt": "a\n", "gate": "g\n"}, {"CODEOWNERS": "/gate @calvindotsg\n", "gate": "g2\n"})
+        check("the PR that adds CODEOWNERS (at the root) is held by it", "codeowners: 1 path(s) (gate)" in last(r.run(repo, b)))
+        repo, b = r.repo(orch, {}, delete=("gate",))
+        p = r.run(repo, b)
+        check("deleting an owned file counts too", "codeowners: 1 path(s) (gate)" in last(p) and "deletes 1" in last(p),
+              last(p))
+        repo, b = r.repo(orch, {}, move=(("gate", "old-gate"),))
+        check("a rename away from an owned path counts", "codeowners: 1 path(s) (gate)" in last(r.run(repo, b)))
+        repo, b = r.repo({"CODEOWNERS": "* @calvindotsg\ndocs/\n", "docs/a.md": "a\n", "b.md": "b\n"},
+                         {"docs/a.md": "a\nb\n"})
+        check("the last matching line decides, and one with no owner leaves a path unowned",
+              last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo({"CODEOWNERS": "* @someone-else\n", "a.md": "a\n"}, {"a.md": "b\n"})
+        check("a path owned only by someone else is not his", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo({"CODEOWNERS": "*.md @CalvinDotSG\n", "a.md": "a\n"}, {"a.md": "b\n"})
+        check("owners match case-insensitively", "codeowners: 1 path(s)" in last(r.run(repo, b)))
+        repo, b = r.repo({"CODEOWNERS": "docs/* @calvindotsg\n", "docs/a/b.md": "a\n"}, {"docs/a/b.md": "b\n"})
+        check("* stays inside one segment: docs/* is not docs/a/b.md",
+              last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo({"CODEOWNERS": "docs/** @calvindotsg\n", "docs/a/b.md": "a\n"}, {"docs/a/b.md": "b\n"})
+        check("** crosses segments", "codeowners: 1 path(s)" in last(r.run(repo, b)))
+        repo, b = r.repo({"a.txt": "a\n"}, {"a.txt": "b\n"})
+        check("no CODEOWNERS file: the rule says so and fires nothing",
+              "rule codeowners: 0 changed path(s) owned by @calvindotsg in no CODEOWNERS file" in r.run(repo, b).stdout)
+
         print("-- bytes that are not UTF-8 (F7) --")
         repo, b = r.repo({"a.txt": "a\n"}, {})
         (repo / "font.woff2").write_bytes(b"wOF2\x88\xff\x00\x9c\ntoken=" + FAKE_SECRET.encode() + b"\n")
@@ -520,7 +574,17 @@ MUTATIONS = [
     ("odd bytes replaced, not carried (F7)", "encoding=\"utf-8\", errors=\"surrogateescape\")",
      "encoding=\"utf-8\", errors=\"replace\")"),
     ("odd path printed strictly (F7)", "    sys.stdout.reconfigure(errors=\"backslashreplace\")", "    pass"),
-    ("a non-merge guessed from the merge-base (F12)", "        raise RuntimeError(\"HEAD is not GitHub's merge of this PR's head: pass --base\")\n", ""),
+    ("codeowners never fires", "    if owned:\n", "    if False:\n"),
+    ("codeowners: any owner counts", "            if last_owners and me in last_owners:", "            if last_owners:"),
+    ("codeowners: head file only (a PR drops its own path)", "for rev in (base, \"HEAD\")]", "for rev in (\"HEAD\",)]"),
+    ("codeowners: base file only (the adding PR passes)", "for rev in (base, \"HEAD\")]", "for rev in (base,)]"),
+    ("codeowners: first match wins", "                    last_owners = owners\n",
+     "                    last_owners = owners if last_owners is None else last_owners\n"),
+    ("codeowners: never anchored", "    anchored = \"/\" in pat.rstrip(\"/\")", "    anchored = False"),
+    ("codeowners: * crosses segments", "            out, i = out + \"[^/]*\", i + 1", "            out, i = out + \".*\", i + 1"),
+    ("codeowners: deletions skipped", "    for path in git(\"diff\", \"--name-only\", \"-z\", \"--no-renames\", base, \"HEAD\").split(\"\\0\"):\n        if not path:\n            continue\n        for _, rows",
+     "    for path in git(\"diff\", \"--name-only\", \"-z\", \"--no-renames\", \"--diff-filter=d\", base, \"HEAD\").split(\"\\0\"):\n        if not path:\n            continue\n        for _, rows"),
+    ("a non-merge guessed from the merge-base (F12)","        raise RuntimeError(\"HEAD is not GitHub's merge of this PR's head: pass --base\")\n", ""),
 ]
 
 
