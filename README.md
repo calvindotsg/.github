@@ -167,7 +167,10 @@ wait forever. `scripts/test-gate-scope.sh [--mutate]` tests the scope step exact
 Calvin when it deletes a tracked file, changes over 1,000 lines outside memory, changes over 20 memory files,
 or adds a line with a secret's shape, or an email, phone number or chat id the base tree does not hold. Binary
 files count as 0 lines, so the `binaries` line lists each one with its size in bytes (or "deleted"), with no
-limit and no effect on the verdict. In CI
+limit and no effect on the verdict. The `codeowners` rule reads the repo's CODEOWNERS (`.github/`, root, then
+`docs/`) at the base and at HEAD, and a change to any path it gives to `@calvindotsg` needs him: plan 3.4's file
+paths. GitHub enforces code-owner review only under branch protection; this rule makes the same list bind in a
+local `./gate` and in merge-green. In CI
 such a change fails until his latest review approves the PR's head commit; one on an older commit is stale.
 A PR he opened himself fails as `review=self-authored`, since GitHub never counts an author's own review:
 re-open it through `gh-bot`. The reviews are read only from the API's own host, and redirects are not

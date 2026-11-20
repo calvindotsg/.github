@@ -18,6 +18,9 @@ THE RULES (each is "needs Calvin" when it fires)
               Only the path and the byte count are printed, never contents.
     scan      an added line carries a secret's shape, or an email, phone number or chat id that the base
               tree does not already hold. The hit is named by file, line and kind; its value is never printed.
+    codeowners  a changed path (deleted and renamed ones included) is owned by @<approver> in the repo's
+              CODEOWNERS (.github/, root, then docs/), read from the base and from HEAD; plan 3.4's file paths.
+              Locally this is the only place that list binds: GitHub's code-owner review needs branch protection.
 
 THE REVIEW
     In CI (GITHUB_ACTIONS=true, a pull_request or pull_request_review event), when a rule fires, the
@@ -140,7 +143,7 @@ def in_base(base: str, rx: re.Pattern, needle: str) -> bool:
     return p.returncode == 0 and any(m.group(0) == needle for line in p.stdout.split("\n") for m in rx.finditer(line))
 
 
-def rules(base: str, memory: list[str]) -> list[tuple[str, str]]:
+def rules(base: str, memory: list[str], approver: str = "calvindotsg") -> list[tuple[str, str]]:
     """[(rule, reason)] for every rule that fires."""
     hits = []
     deleted = [p for p in git("diff", "--name-only", "-z", "--no-renames", "--diff-filter=D", base, "HEAD").split("\0") if p]
@@ -205,7 +208,80 @@ def rules(base: str, memory: list[str]) -> list[tuple[str, str]]:
     print(f"rule scan: {len(found)} hit(s)" + "".join(f"\n  {f}" for f in found[:20]))
     if found:
         hits.append(("scan", f"scan hit ({len(found)})"))
+
+    owned, where = codeowned(base, approver)
+    print(f"rule codeowners: {len(owned)} changed path(s) owned by @{approver} in {where}"
+          + "".join(f"\n  {p}" for p in owned[:20]))
+    if owned:
+        hits.append(("codeowners", f"codeowners: {len(owned)} path(s) ({', '.join(owned[:3])})"))
     return hits
+
+
+CODEOWNERS_FILES = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")   # GitHub's order: the first one found
+
+
+def owner_pattern(pat: str) -> re.Pattern:
+    """A CODEOWNERS pattern (gitignore rules) as a regex on a repo path. A leading or inner slash anchors it at the
+    root, else it matches at any depth; a trailing slash matches only under a directory; a pattern whose last segment
+    has no wildcard also matches everything under a directory it names; `*` and `?` stay inside one path segment
+    (so `docs/*` is not `docs/a/b.md`, as GitHub documents), `**` crosses them."""
+    anchored = "/" in pat.rstrip("/")
+    is_dir = pat.endswith("/")
+    core, out, i = pat.strip("/"), "", 0
+    while i < len(core):
+        if core.startswith("**/", i):
+            out, i = out + "(?:.*/)?", i + 3
+        elif core.startswith("/**", i) and i + 3 == len(core):
+            out, i = out + "(?:/.*)?", i + 3
+        elif core.startswith("**", i):
+            out, i = out + ".*", i + 2
+        elif core[i] == "*":
+            out, i = out + "[^/]*", i + 1
+        elif core[i] == "?":
+            out, i = out + "[^/]", i + 1
+        else:
+            out, i = out + re.escape(core[i]), i + 1
+    tail = "/.*$" if is_dir else "$" if re.search(r"[*?]", core.rsplit("/", 1)[-1]) else "(?:/.*)?$"
+    return re.compile(("^" if anchored else "^(?:.*/)?") + out + tail)
+
+
+def owner_rules(rev: str) -> tuple[str, list[tuple[re.Pattern, list[str]]]]:
+    """(file name, [(pattern, owners)]) from the first CODEOWNERS file in `rev`'s tree; ("", []) if it has none."""
+    for name in CODEOWNERS_FILES:
+        try:
+            text = git("show", f"{rev}:{name}")
+        except RuntimeError:
+            continue
+        rows = []
+        for line in text.split("\n"):
+            words = line.split("#", 1)[0].split()
+            if words:
+                rows.append((owner_pattern(words[0]), [w.lower() for w in words[1:]]))
+        return name, rows
+    return "", []
+
+
+def codeowned(base: str, approver: str) -> tuple[list[str], str]:
+    """Changed paths (added, changed, deleted, both sides of a rename) that the approver owns by CODEOWNERS, in the
+    base's file or the head's: a PR cannot drop its own path from the list, and the PR adding the file is held by
+    it. The last matching line decides a path, and a line with no owners leaves it unowned, as on GitHub."""
+    me = "@" + approver.lower()
+    files = [owner_rules(rev) for rev in (base, "HEAD")]
+    where = " and ".join(sorted({f"{name} at {rev}" for (name, _), rev in zip(files, ("base", "HEAD")) if name})) \
+        or "no CODEOWNERS file"
+    owned = []
+    for path in git("diff", "--name-only", "-z", "--no-renames", base, "HEAD").split("\0"):
+        if not path:
+            continue
+        for _, rows in files:
+            last_owners = None
+            for rx, owners in rows:
+                if rx.match(path):
+                    last_owners = owners
+            if last_owners and me in last_owners:
+                owned.append(path)
+                break
+    return owned, where
 
 
 def api(path: str, token: str) -> list:
@@ -266,7 +342,7 @@ def main(argv: list[str]) -> int:
             return 2
     try:
         base = base or default_base()
-        hits = rules(base, memory or DEFAULT_MEMORY)
+        hits = rules(base, memory or DEFAULT_MEMORY, approver)
     except (RuntimeError, ValueError) as e:
         print(f"needs-calvin=undecided review=not-needed\ngate-rules: {e}", file=sys.stderr)
         return 2
