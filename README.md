@@ -174,7 +174,22 @@ local `./gate` and in merge-green. In CI
 such a change fails until his latest review approves the PR's head commit; one on an older commit is stale.
 A PR he opened himself fails as `review=self-authored`, since GitHub never counts an author's own review:
 re-open it through `gh-bot`. The reviews are read only from the API's own host, and redirects are not
-followed, so the token goes nowhere else. Locally the rules are advisory and say the review was skipped. Each repository's `./gate` runs a vendored
+followed, so the token goes nowhere else. Locally the rules are advisory and say the review was skipped.
+
+Six config-safety rules keep the paths that left CODEOWNERS safe without his review of every change (his
+answer of 25 Nov 2026, "option 2"). A change needs him when it:
+
+- `settings`: drops a deny rule from a Claude Code `settings.json`, or drops or changes a hook command or the
+  `statusLine` command. Adding is fine.
+- `gitignore`: adds a `!` line to a `.gitignore` that names a secret-bearing path or opens a whole tree
+  (`/**`, `/*`), or removes an ignore line.
+- `guards`: changes a script that a hook or the `statusLine` runs, without changing its test (a test file
+  beside it named for it, else any test file beside it).
+- `gatefile`: removes or changes a line of the root `./gate`. A new line is fine.
+- `rulesfile`: touches `gate-rules.py` or its pin, `gate-rules.sha256`.
+- `workflows`: touches a file under `.github/workflows/`.
+
+Each repository's `./gate` runs a vendored
 copy and fails if that copy's sha256 differs from its pin. `scripts/test-gate-rules.py [--mutate]` has a red
 fixture per rule.
 

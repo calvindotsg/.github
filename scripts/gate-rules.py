@@ -21,6 +21,15 @@ THE RULES (each is "needs Calvin" when it fires)
     codeowners  a changed path (deleted and renamed ones included) is owned by @<approver> in the repo's
               CODEOWNERS (.github/, root, then docs/), read from the base and from HEAD; plan 3.4's file paths.
               Locally this is the only place that list binds: GitHub's code-owner review needs branch protection.
+    settings  a settings.json that has Claude Code's `permissions` or `hooks` at the base loses a deny rule, or a
+              hook command (or the statusLine command) at the base is gone or changed at HEAD. Adding is fine.
+    gitignore a .gitignore change un-ignores: it adds a `!` line that names a secret-bearing path (credentials,
+              tokens, keys, sessions, state) or opens a whole tree (`/**`, `/*`), or it removes an ignore line.
+    guards    a script that a hook or the statusLine runs (read from settings.json at the base and HEAD) changes
+              and its test does not: a test file in its directory named for it, else any test file there.
+    gatefile  the change removes or changes a line of the repo's ./gate. A line only added is fine.
+    rulesfile the change touches gate-rules.py or its pin, gate-rules.sha256.
+    workflows the change touches a file under .github/workflows/.
 
 THE REVIEW
     In CI (GITHUB_ACTIONS=true, a pull_request or pull_request_review event), when a rule fires, the
@@ -214,7 +223,123 @@ def rules(base: str, memory: list[str], approver: str = "calvindotsg") -> list[t
           + "".join(f"\n  {p}" for p in owned[:20]))
     if owned:
         hits.append(("codeowners", f"codeowners: {len(owned)} path(s) ({', '.join(owned[:3])})"))
+
+    changed = [p for p in git("diff", "--name-only", "-z", "--no-renames", base, "HEAD").split("\0") if p]
+    for name, found_here, reason in config_safety(base, changed):
+        print(f"rule {name}: {len(found_here)} hit(s)" + "".join(f"\n  {f}" for f in found_here[:20]))
+        if found_here:
+            hits.append((name, f"{reason} ({', '.join(found_here[:3])})"))
     return hits
+
+
+# Calvin, 25 Nov 2026 10:49:19 SGT (record 5315bcee, "option 2"): with CODEOWNERS emptied, these changes still need
+# him. They live here, in the pinned rules, so a PR to a config repo cannot weaken the check that judges it without
+# also tripping `rulesfile`.
+SECRET_WORDS = re.compile(r"credential|secret|token|passw|auth|cookie|\.env\b|\.pem\b|\.key\b|\.p12\b|id_rsa|id_ed25519"
+                          r"|keychain|1password|settings\.local|session|history|(^|/)state(/|$)|\.jsonl\b", re.I)
+SCRIPT_REF = re.compile(r"(?:\$HOME|\$\{HOME\}|~)/\.claude/([^\s'\"]+)")
+
+
+def show(rev: str, path: str):
+    """The file's text at rev, or None when it is absent there."""
+    try:
+        return git("show", f"{rev}:{path}")
+    except RuntimeError:
+        return None
+
+
+def claude_settings(text):
+    """(deny rules, hook commands, statusLine command) of a Claude Code settings.json, or None if it is not one."""
+    try:
+        data = json.loads(text) if text is not None else None
+    except ValueError:
+        return "unreadable"
+    if not isinstance(data, dict) or not ("permissions" in data or "hooks" in data):
+        return None
+    perms = data.get("permissions") if isinstance(data.get("permissions"), dict) else {}
+    deny = {d for d in perms.get("deny") or [] if isinstance(d, str)}
+    hooks = set()
+    for event, groups in (data.get("hooks") or {}).items():
+        for g in groups if isinstance(groups, list) else []:
+            for h in (g.get("hooks") or []) if isinstance(g, dict) else []:
+                if isinstance(h, dict):
+                    hooks.add((event, g.get("matcher", ""), h.get("command", "")))
+    status = data.get("statusLine") if isinstance(data.get("statusLine"), dict) else {}
+    return deny, hooks, status.get("command", "")
+
+
+def guard_paths(commands) -> set:
+    """Repo paths of the scripts the commands run. The settings file sits at the repo root, which is ~/.claude."""
+    return {m.group(1) for c in commands for m in SCRIPT_REF.finditer(c or "")}
+
+
+def norm(name: str) -> str:
+    return name.lower().replace("-", "_")
+
+
+def config_safety(base: str, changed: list) -> list:
+    """[(rule, hits, reason)] for the six config-safety rules, in order, fired or not."""
+    out = []
+
+    settings, guards = [], set()
+    for path in sorted({p for p in changed if p.rsplit("/", 1)[-1] == "settings.json"}
+                       | {p for p in ("settings.json",) if show(base, p) is not None}):
+        before, after = claude_settings(show(base, path)), claude_settings(show("HEAD", path))
+        for side in (before, after):
+            if isinstance(side, tuple) and "/" not in path:
+                guards |= guard_paths([c for _, _, c in side[1]] + [side[2]])
+        if path not in changed or before is None:
+            continue
+        if before == "unreadable":
+            continue
+        if not isinstance(after, tuple):
+            settings.append(f"{path} is no longer Claude Code settings")
+            continue
+        settings += [f"{path} deny rule lost: {d}" for d in sorted(before[0] - after[0])]
+        settings += [f"{path} hook lost or changed: {e} {m!r}" for e, m, _ in sorted(before[1] - after[1])]
+        if before[2] and before[2] != after[2]:
+            settings.append(f"{path} statusLine command changed")
+    out.append(("settings", settings, "settings.json weakened"))
+
+    ignores = []
+    for path in [p for p in changed if p.rsplit("/", 1)[-1] == ".gitignore"]:
+        for line in git("--literal-pathspecs", "diff", "-U0", "--no-color", "--no-ext-diff", base, "HEAD", "--",
+                        path).split("\n"):
+            if line.startswith(("+++", "---")) or not line[:1] in ("+", "-"):
+                continue
+            rule = line[1:].strip()
+            if not rule or rule.startswith("#"):
+                continue
+            if line[0] == "+" and rule.startswith("!") and (SECRET_WORDS.search(rule) or rule.endswith(("/**", "/*"))):
+                ignores.append(f"{path} un-ignores {rule}")
+            elif line[0] == "-" and not rule.startswith("!"):
+                ignores.append(f"{path} drops the ignore {rule}")
+    out.append(("gitignore", ignores, ".gitignore un-ignores"))
+
+    untested = []
+    head_files = [p for p in git("ls-files", "-z").split("\0") if p]
+    for g in sorted(guards & set(changed)):
+        folder = g.rsplit("/", 1)[0] if "/" in g else ""
+        stem = norm(g.rsplit("/", 1)[-1].rsplit(".", 1)[0])
+        here = lambda p: (p.rsplit("/", 1)[0] if "/" in p else "") == folder and p.rsplit("/", 1)[-1].startswith("test")
+        named = [p for p in head_files if here(p) and stem in norm(p.rsplit("/", 1)[-1])]
+        if not any(p in changed for p in (named or [p for p in head_files + changed if here(p)])):
+            untested.append(f"{g} (its test: {named[0] if named else 'any test file beside it'})")
+    out.append(("guards", untested, "hook guard changed without its test"))
+
+    gate_lines = []
+    if "gate" in changed:
+        for line in git("diff", "-U0", "--no-color", "--no-ext-diff", base, "HEAD", "--", "gate").split("\n"):
+            if line.startswith("-") and not line.startswith("---"):
+                gate_lines.append(f"gate: {line[1:].strip()[:80]}")
+    out.append(("gatefile", gate_lines, "gate line removed or changed"))
+
+    rules_files = [p for p in changed if p.rsplit("/", 1)[-1] in ("gate-rules.py", "gate-rules.sha256")]
+    out.append(("rulesfile", rules_files, "gate rules or pin changed"))
+
+    flows = [p for p in changed if p.startswith(".github/workflows/")]
+    out.append(("workflows", flows, "CI workflow changed"))
+    return out
 
 
 CODEOWNERS_FILES = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")   # GitHub's order: the first one found
