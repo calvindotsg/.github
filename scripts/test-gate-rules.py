@@ -372,6 +372,108 @@ def run_suite(tool: Path) -> None:
         check("no CODEOWNERS file: the rule says so and fires nothing",
               "rule codeowners: 0 changed path(s) owned by @calvindotsg in no CODEOWNERS file" in r.run(repo, b).stdout)
 
+        print("-- config safety (Calvin 25 Nov, record 5315bcee, option 2) --")
+        def cfg(deny=("Bash(rm -rf *)", "Bash(sudo *)"), hooks=(("PreToolUse", "Bash", "bash $HOME/.claude/scripts/rm-guard.sh"),
+                ("Stop", "", "python3 -I $HOME/.claude/skills/o/scripts/tail_guard.py")), status="python3 $HOME/.claude/scripts/statusline.py"):
+            h = {}
+            for e, m, c in hooks:
+                h.setdefault(e, []).append({"matcher": m, "hooks": [{"type": "command", "command": c}]})
+            return json.dumps({"permissions": {"deny": list(deny), "allow": []}, "hooks": h,
+                               "statusLine": {"type": "command", "command": status}}, indent=2) + "\n"
+        home = {"settings.json": cfg(), "scripts/rm-guard.sh": "r\n", "scripts/test_rm_guard.sh": "t\n",
+                "scripts/test_other.sh": "o\n", "scripts/statusline.py": "s\n", "scripts/test_statusline.sh": "t\n",
+                "skills/o/scripts/tail_guard.py": "t\n", "skills/o/scripts/test_orch.sh": "t\n",
+                ".gitignore": "/tmp/\n!/settings.json\n/skills/synced/\n", "gate": 'check "a" x\ncheck "b" y\n',
+                "scripts/gate/gate-rules.py": "r\n", "scripts/gate/gate-rules.sha256": "abc  gate-rules.py\n",
+                ".github/workflows/gate.yml": "on: pull_request\n", "notes.md": "n\n"}
+        repo, b = r.repo(home, {"settings.json": cfg(deny=("Bash(sudo *)",))})
+        p = r.run(repo, b)
+        check("RED settings: a lost deny rule needs Calvin",
+              "settings.json weakened (settings.json deny rule lost: Bash(rm -rf *))" in last(p), p.stdout)
+        p = r.run(repo, b, ci=True, head="headsha")
+        check("...and in CI fails until he approves (exit 1)", p.returncode == 1 and "review=missing" in last(p), p.stdout)
+        repo, b = r.repo(home, {"settings.json": cfg(hooks=(("Stop", "", "python3 -I $HOME/.claude/skills/o/scripts/tail_guard.py"),))})
+        check("RED settings: a lost hook", "hook lost or changed: PreToolUse 'Bash'" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"settings.json": cfg(hooks=(("PreToolUse", "Bash", "true"),
+                                                            ("Stop", "", "python3 -I $HOME/.claude/skills/o/scripts/tail_guard.py")))})
+        check("RED settings: a hook command changed", "hook lost or changed: PreToolUse 'Bash'" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"settings.json": cfg(status="true")})
+        check("RED settings: the statusLine command changed", "statusLine command changed" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"settings.json": "{not json\n"})
+        check("RED settings: a settings.json that no longer parses", "no longer Claude Code settings" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"settings.json": cfg(deny=("Bash(rm -rf *)", "Bash(sudo *)", "Bash(curl *)"),
+                                                     hooks=(("PreToolUse", "Bash", "bash $HOME/.claude/scripts/rm-guard.sh"),
+                                                            ("Stop", "", "python3 -I $HOME/.claude/skills/o/scripts/tail_guard.py"),
+                                                            ("Stop", "", "bash $HOME/.claude/scripts/new.sh")))})
+        check("GREEN settings: adding a deny rule and a hook needs no one",
+              last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo({"zed/settings.json": '{"theme": "a"}\n'}, {"zed/settings.json": '{"theme": "b"}\n'})
+        check("GREEN settings: a settings.json that is not Claude Code's is not read",
+              last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n/skills/synced/\n!/.credentials.json\n"})
+        check("RED gitignore: un-ignoring a secret path", ".gitignore un-ignores (.gitignore un-ignores !/.credentials.json)"
+              in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n/skills/synced/\n!/sessions/\n"})
+        check("RED gitignore: ... a sessions folder", ".gitignore un-ignores" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n/skills/synced/\n!/cmux/**\n"})
+        check("RED gitignore: opening a whole tree", "un-ignores !/cmux/**" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n"})
+        check("RED gitignore: dropping an ignore line", "drops the ignore /skills/synced/" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n/skills/synced/\n# plans\n!/plans/x.md\n"})
+        check("GREEN gitignore: whitelisting one plain file, with a comment",
+              last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(home |{".gitignore": "# why\n/tmp/\n!/settings.json\n/skills/synced/\n"},
+                         {".gitignore": "/tmp/\n!/settings.json\n/skills/synced/\n"})
+        check("GREEN gitignore: removing a comment line", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n/skills/synced/\n"})
+        check("GREEN gitignore: removing a whitelist line ignores more", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+
+        repo, b = r.repo(home, {"scripts/rm-guard.sh": "r2\n"})
+        check("RED guards: a hook guard changed without its test",
+              "hook guard changed without its test (scripts/rm-guard.sh (its test: scripts/test_rm_guard.sh))" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"scripts/rm-guard.sh": "r2\n", "scripts/test_other.sh": "o2\n"})
+        check("RED guards: another suite changing is not its test", "scripts/rm-guard.sh" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"scripts/rm-guard.sh": "r2\n", "scripts/test_rm_guard.sh": "t2\n"})
+        check("GREEN guards: the guard with its test", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(home, {"scripts/statusline.py": "s2\n"})
+        check("RED guards: the statusLine script counts", "scripts/statusline.py" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"skills/o/scripts/tail_guard.py": "t2\n"})
+        check("RED guards: no test named for it, none beside it changed", "tail_guard.py" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"skills/o/scripts/tail_guard.py": "t2\n", "skills/o/scripts/test_orch.sh": "t2\n"})
+        check("GREEN guards: ...and with the suite beside it", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(home, {"settings.json": cfg(hooks=(("PreToolUse", "Bash", "bash $HOME/.claude/scripts/rm-guard.sh"),
+                                                            ("Stop", "", "python3 -I $HOME/.claude/skills/o/scripts/tail_guard.py"),
+                                                            ("Stop", "", "bash $HOME/.claude/scripts/new.sh"))),
+                                "scripts/new.sh": "n\n"})
+        check("RED guards: a new hook script needs a test too", "scripts/new.sh" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"notes.md": "n2\n"})
+        check("GREEN: a change to no config path needs no one", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+
+        repo, b = r.repo(home, {"gate": 'check "a" x\ncheck "b" y2\n'})
+        check("RED gatefile: a changed check line", "gate line removed or changed (gate: check \"b\" y)" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"gate": 'check "a" x\n'})
+        check("RED gatefile: a removed check line", "gate line removed or changed" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"gate": 'check "a" x\ncheck "b" y\ncheck "c" z\n'})
+        check("GREEN gatefile: a new check line", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(home, {"x/gate": "g\n"})
+        check("GREEN gatefile: only the root gate counts", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+
+        repo, b = r.repo(home, {"scripts/gate/gate-rules.py": "r2\n"})
+        check("RED rulesfile: the vendored rules", "gate rules or pin changed (scripts/gate/gate-rules.py)" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"scripts/gate/gate-rules.sha256": "def  gate-rules.py\n"})
+        check("RED rulesfile: the pin alone", "gate rules or pin changed (scripts/gate/gate-rules.sha256)" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".github/workflows/gate.yml": "on: push\n"})
+        check("RED workflows: a changed workflow", "CI workflow changed (.github/workflows/gate.yml)" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".github/workflows/new.yml": "on: push\n"})
+        check("RED workflows: a new workflow", "CI workflow changed (.github/workflows/new.yml)" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".github/PULL_REQUEST_TEMPLATE.md": "t\n"})
+        check("GREEN workflows: other .github files", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        p = r.run(*r.repo(home, {"notes.md": "n3\n"}))
+        check("every config-safety rule prints its line",
+              all(f"rule {n}: 0 hit(s)" in p.stdout for n in ("settings", "gitignore", "guards", "gatefile", "rulesfile",
+                                                               "workflows")), p.stdout)
+
         print("-- bytes that are not UTF-8 (F7) --")
         repo, b = r.repo({"a.txt": "a\n"}, {})
         (repo / "font.woff2").write_bytes(b"wOF2\x88\xff\x00\x9c\ntoken=" + FAKE_SECRET.encode() + b"\n")
@@ -584,6 +686,30 @@ MUTATIONS = [
     ("codeowners: * crosses segments", "            out, i = out + \"[^/]*\", i + 1", "            out, i = out + \".*\", i + 1"),
     ("codeowners: deletions skipped", "    for path in git(\"diff\", \"--name-only\", \"-z\", \"--no-renames\", base, \"HEAD\").split(\"\\0\"):\n        if not path:\n            continue\n        for _, rows",
      "    for path in git(\"diff\", \"--name-only\", \"-z\", \"--no-renames\", \"--diff-filter=d\", base, \"HEAD\").split(\"\\0\"):\n        if not path:\n            continue\n        for _, rows"),
+    ("settings: deny loss ignored", "settings += [f\"{path} deny rule lost: {d}\" for d in sorted(before[0] - after[0])]",
+     "pass"),
+    ("settings: hook loss ignored", "settings += [f\"{path} hook lost or changed: {e} {m!r}\" for e, m, _ in sorted(before[1] - after[1])]",
+     "pass"),
+    ("settings: statusLine ignored", "        if before[2] and before[2] != after[2]:", "        if False:"),
+    ("settings: unparseable head passes", "        if not isinstance(after, tuple):\n", "        if after is None:\n"),
+    ("settings: never fires", "            hits.append((name, f\"{reason}", "            0 and hits.append((name, f\"{reason}"),
+    ("gitignore: secret words off", "(SECRET_WORDS.search(rule) or rule.endswith", "(False or rule.endswith"),
+    ("gitignore: whole tree allowed", "or rule.endswith((\"/**\", \"/*\")))", "or False)"),
+    ("gitignore: dropped ignores allowed", "            elif line[0] == \"-\" and not rule.startswith(\"!\"):", "            elif False:"),
+    ("gitignore: comments count", "            if not rule or rule.startswith(\"#\"):", "            if not rule:"),
+    ("gitignore: removing a whitelist line fires", "            elif line[0] == \"-\" and not rule.startswith(\"!\"):",
+     "            elif line[0] == \"-\":"),
+    ("guards: any test beside counts", "(named or [p for p in head_files + changed if here(p)])",
+     "([p for p in head_files + changed if here(p)])"),
+    ("guards: statusLine not read", "[c for _, _, c in side[1]] + [side[2]]", "[c for _, _, c in side[1]]"),
+    ("guards: base settings only", "        for side in (before, after):\n", "        for side in (before,):\n"),
+    ("gatefile: additions fire", "            if line.startswith(\"-\") and not line.startswith(\"---\"):",
+     "            if line[:1] in \"+-\" and not line.startswith((\"---\", \"+++\")):"),
+    ("gatefile: never fires", "    if \"gate\" in changed:", "    if False:"),
+    ("rulesfile: pin not counted", "in (\"gate-rules.py\", \"gate-rules.sha256\")]", "in (\"gate-rules.py\",)]"),
+    ("workflows: never fires", "flows = [p for p in changed if p.startswith(\".github/workflows/\")]", "flows = []"),
+    ("workflows: all of .github", "flows = [p for p in changed if p.startswith(\".github/workflows/\")]",
+     "flows = [p for p in changed if p.startswith(\".github/\")]"),
     ("a non-merge guessed from the merge-base (F12)","        raise RuntimeError(\"HEAD is not GitHub's merge of this PR's head: pass --base\")\n", ""),
 ]
 
