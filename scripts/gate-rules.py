@@ -8,6 +8,9 @@ the orchestrator's 20 Oct ruling: one rules script, in calvindotsg/.github). It 
 --base to HEAD and prints one line per rule, then
 
     needs-calvin=<reason; reason|none> review=<approved|missing|stale|not-needed|skipped-local>
+        [ judge=<reasons|none>, under a trusted judge]
+
+A control character in a reason (a file name with a newline) prints as \\xNN, so the line stays one line.
 
 THE RULES (each is "needs Calvin" when it fires)
     deleted   the change deletes a tracked file
@@ -31,6 +34,20 @@ THE RULES (each is "needs Calvin" when it fires)
     rulesfile the change touches gate-rules.py or its pin, gate-rules.sha256.
     workflows the change touches a file under .github/workflows/.
 
+THE TRUSTED JUDGE (GATE_TRUSTED_JUDGE=1)
+    Calvin, 26 Nov 2026 10:11:28 SGT (record 919abb82, "Two keys for four hits"): a change to the judge lands on
+    two keys, with no review by him. When the caller sets GATE_TRUSTED_JUDGE=1, the gatefile, rulesfile, workflows
+    and codeowners rules no longer need Calvin: their hits print as a tag, `judge=<reasons>`, at the end of the
+    last line, and merge-green holds such a PR to its two-key path. Every other rule is unchanged, so a lost deny
+    rule or hook, an un-ignored secret or an untested guard still needs him.
+    The tag is honoured only when the judge that runs is the base's own: this rules file, the gate-rules.sha256
+    beside it, the root ./gate and each CODEOWNERS file must be byte for byte the base's copies in the working
+    tree (the caller puts them there, as the shared workflow's trusted-judge input does). If any differs, the
+    request is refused with the path named and the rules need Calvin as before, so a PR that edits its own gate
+    to set the variable gains nothing. So is a file in the rules file's folder that the base lacks or holds
+    otherwise (Python would import it), a rules file outside the repository, and a failed comparison. Only the
+    value 1 asks.
+
 THE REVIEW
     In CI (GITHUB_ACTIONS=true, a pull_request or pull_request_review event), when a rule fires, the
     approver's latest review must be APPROVED on the PR's head sha; one on an older sha is stale. It reads
@@ -40,7 +57,7 @@ THE REVIEW
     under any other event there is no PR to read, so a rule that fires there cannot be decided (exit 2).
 
 EXIT CODES
-    0 nothing needs Calvin, or he approved the head, or a local run; 1 needs Calvin and not approved on the
+    0 nothing needs Calvin (judge tags included), or he approved the head, or a local run; 1 needs Calvin and not approved on the
     head, or self-authored (CI); 2 cannot decide (bad base, unreadable event, API failure), which fails closed.
 
 THE BASE, when --base is not given
@@ -49,15 +66,21 @@ THE BASE, when --base is not given
     with origin/main (else main). A branch head that merged main is never measured from its first parent.
 """
 
-from __future__ import annotations
-
-import fnmatch
-import http.client
-import json
-import os
-import re
-import subprocess
 import sys
+
+# Run as a script, Python puts this file's folder first on the import path, so a file a PR adds beside it (an
+# fnmatch.py, a json/ package) would run inside the judge before any check could look. Drop that entry before the
+# first import that reads the path; `sys` is built in. Under -I or -P Python never adds it. No `from __future__`
+# import either: it too is read from the path.
+if __name__ == "__main__" and sys.path and not sys.flags.isolated and not getattr(sys.flags, "safe_path", False):
+    del sys.path[0]
+
+import fnmatch  # noqa: E402 (after the path is fixed)
+import http.client  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import re  # noqa: E402
+import subprocess  # noqa: E402
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -343,6 +366,50 @@ def config_safety(base: str, changed: list) -> list:
 
 
 CODEOWNERS_FILES = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")   # GitHub's order: the first one found
+JUDGE_RULES = ("gatefile", "rulesfile", "workflows", "codeowners")   # tags, not Calvin, under a trusted judge
+
+
+def blob(rev: str, path: str):
+    """The blob id of path at rev, or None when it is absent there."""
+    try:
+        return git("rev-parse", "--verify", "--quiet", f"{rev}:{path}").strip() or None
+    except RuntimeError:
+        return None
+
+
+def trusted_judge(base: str):
+    """(True, "") when GATE_TRUSTED_JUDGE=1 and the judge in the working tree is the base's own; (False, why) when
+    the variable is set but the judge differs; (False, "") when it is not set."""
+    if os.environ.get("GATE_TRUSTED_JUDGE") != "1":
+        return False, ""
+    top = git("rev-parse", "--show-toplevel").strip()
+    me = os.path.realpath(__file__)
+    rel = os.path.relpath(me, os.path.realpath(top))
+    if rel.startswith(".." + os.sep) or rel == "..":
+        return False, f"this rules file is outside the repository ({me})"
+    folder = os.path.dirname(rel)
+    # The walk below covers this file and its pin when they exist; the pin is named so a deleted one counts too.
+    paths = [os.path.join(folder, "gate-rules.sha256"), "gate", *CODEOWNERS_FILES]
+    # Python puts this file's folder first on the import path, so a file the PR added beside it (an fnmatch.py, a
+    # json/ package) would run inside the judge: every file there, untracked ones included, must be the base's too.
+    # A __pycache__ is skipped: Python loads a cached .pyc only for a source file beside it.
+    for root, dirs, files in os.walk(os.path.join(top, folder)):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        paths += [os.path.relpath(os.path.join(root, f), top) for f in sorted(files)]
+        paths += [os.path.relpath(os.path.join(root, d), top) for d in dirs if os.path.islink(os.path.join(root, d))]
+    for path in paths:
+        here = os.path.join(top, path)
+        now = git("hash-object", "--no-filters", "--", here).strip() \
+            if os.path.isfile(here) and not os.path.islink(here) else None if not os.path.lexists(here) else "other"
+        if now != blob(base, path):
+            return False, f"{path} is not the base's copy"
+    return True, ""
+
+
+def plain(text: str) -> str:
+    """A reason as one line: a path with a newline or other control character in it must not start a line of its
+    own, which ./gate could read as the last needs-calvin line."""
+    return re.sub(r"[\x00-\x1f\x7f]", lambda m: f"\\x{ord(m.group(0)):02x}", text)
 
 
 def owner_pattern(pat: str) -> re.Pattern:
@@ -471,7 +538,19 @@ def main(argv: list[str]) -> int:
     except (RuntimeError, ValueError) as e:
         print(f"needs-calvin=undecided review=not-needed\ngate-rules: {e}", file=sys.stderr)
         return 2
-    reasons = "; ".join(r for _, r in hits) or "none"
+    try:
+        trusted, refused = trusted_judge(base)
+    except RuntimeError as e:
+        trusted, refused = False, f"cannot compare the judge with the base: {e}"
+    if refused:
+        print(f"gate-rules: trusted judge refused: {refused}; the judge rules need Calvin")
+    judged = [h for h in hits if trusted and h[0] in JUDGE_RULES]
+    hits = [h for h in hits if h not in judged]
+    tag = f" judge={plain('; '.join(r for _, r in judged)) or 'none'}" if trusted else ""
+    if trusted:
+        print("gate-rules: trusted judge: the base's judge runs; gatefile, rulesfile, workflows and codeowners "
+              "print as tags")
+    reasons = plain("; ".join(r for _, r in hits)) or "none"
     actions = os.environ.get("GITHUB_ACTIONS") == "true"
     event = os.environ.get("GITHUB_EVENT_NAME")
     if not hits:
@@ -479,7 +558,7 @@ def main(argv: list[str]) -> int:
     elif not actions:
         state = "skipped-local"
     elif event not in ("pull_request", "pull_request_review"):
-        print(f"needs-calvin={reasons} review=undecided\ngate-rules: a {event} run has no PR whose review could "
+        print(f"needs-calvin={reasons} review=undecided{tag}\ngate-rules: a {event} run has no PR whose review could "
               "clear this", file=sys.stderr)
         return 2
     else:
@@ -487,10 +566,10 @@ def main(argv: list[str]) -> int:
             state = review(approver)
         except (OSError, KeyError, TypeError, AttributeError, ValueError, RuntimeError, urllib.error.URLError,
                 http.client.HTTPException) as e:
-            print(f"needs-calvin={reasons} review=undecided\ngate-rules: cannot read the review: {e}",
+            print(f"needs-calvin={reasons} review=undecided{tag}\ngate-rules: cannot read the review: {e}",
                   file=sys.stderr)
             return 2
-    print(f"needs-calvin={reasons} review={state}")
+    print(f"needs-calvin={reasons} review={state}{tag}")
     if state == "skipped-local":
         print("gate-rules: local run, review not checked (advisory)")
     if state == "self-authored":
