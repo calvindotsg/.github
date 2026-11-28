@@ -121,7 +121,7 @@ class Rig:
         return r, b
 
     def run(self, repo: Path, base: str, ci: bool = False, head: str = "", author: str = "calvindotsg-agent[bot]",
-            event=None, args: tuple = (), **extra: str):
+            event=None, args: tuple = (), tool=None, **extra: str):
         Api.calls = []
         env = {"PATH": "/usr/bin:/bin", "HOME": str(self.dir)}
         if ci:
@@ -132,7 +132,7 @@ class Rig:
                         "GITHUB_REPOSITORY": "calvindotsg/x", "GATE_GITHUB_TOKEN": "fake-token",
                         "GATE_GITHUB_API": f"http://127.0.0.1:{self.server.server_address[1]}"})
         env.update(extra)
-        return subprocess.run([sys.executable, str(self.tool), *(["--base", base] if base is not None else []), *args],
+        return subprocess.run([sys.executable, str(tool or self.tool), *(["--base", base] if base is not None else []), *args],
                               cwd=repo, env=env,
                               capture_output=True, text=True, timeout=60)
 
@@ -456,6 +456,18 @@ def run_suite(tool: Path) -> None:
         check("RED gatefile: a removed check line", "gate line removed or changed" in last(r.run(repo, b)))
         repo, b = r.repo(home, {"gate": 'check "a" x\ncheck "b" y\ncheck "c" z\n'})
         check("GREEN gatefile: a new check line", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(home, {"gate": 'check "a" x\n', ".gitattributes": "gate -diff\n"})
+        check("RED gatefile: a .gitattributes that marks the gate binary hides nothing",
+              "gate line removed or changed (gate: check \"b\" y)" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"gate": 'check "a" x\n', ".gitattributes": "gate diff=fake\n"})
+        subprocess.run(["git", "-C", str(repo), "config", "diff.fake.textconv", "true"], check=True)
+        check("RED gatefile: a textconv driver hides nothing", "gate line removed or changed" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n", ".gitattributes": ".gitignore -diff\n"})
+        check("RED gitignore: a .gitattributes that marks it binary hides nothing",
+              "drops the ignore /skills/synced/" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n", ".gitattributes": ".gitignore diff=fake\n"})
+        subprocess.run(["git", "-C", str(repo), "config", "diff.fake.textconv", "true"], check=True)
+        check("RED gitignore: a textconv driver hides nothing", "drops the ignore /skills/synced/" in last(r.run(repo, b)))
         repo, b = r.repo(home, {"x/gate": "g\n"})
         check("GREEN gatefile: only the root gate counts", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
 
@@ -473,6 +485,175 @@ def run_suite(tool: Path) -> None:
         check("every config-safety rule prints its line",
               all(f"rule {n}: 0 hit(s)" in p.stdout for n in ("settings", "gitignore", "guards", "gatefile", "rulesfile",
                                                                "workflows")), p.stdout)
+
+        print("-- the trusted judge (Q5 a, record 919abb82) --")
+        judge = {**home, "scripts/gate/gate-rules.py": tool.read_text(),
+                 "scripts/gate/gate-rules.sha256": "pin  gate-rules.py\n",
+                 ".github/CODEOWNERS": "/scripts/owned.sh @calvindotsg\n", "scripts/owned.sh": "o\n"}
+        TJ = {"GATE_TRUSTED_JUDGE": "1"}
+
+        def jrun(repo, b, overlay=(), **kw):
+            """Run the repo's own rules file, after putting the base's copy of `overlay` paths over the tree."""
+            if overlay:
+                subprocess.run(["git", "-C", str(repo), "checkout", b, "--", *overlay], check=True, capture_output=True)
+            return r.run(repo, b, tool=repo / "scripts/gate/gate-rules.py", **kw)
+
+        JUDGE = ("gate", "scripts/gate", ".github/CODEOWNERS")
+        repo, b = r.repo(judge, {"notes.md": "n2\n"})
+        p = jrun(repo, b, **TJ)
+        check("TJ: nothing fires, the tag says none",
+              last(p) == "needs-calvin=none review=not-needed judge=none" and p.returncode == 0
+              and "gate-rules: trusted judge: the base's judge runs" in p.stdout, p.stdout)
+        repo, b = r.repo(judge, {"gate": 'check "a" x\ncheck "b" y2\n'})
+        p = jrun(repo, b, overlay=JUDGE, ci=True, **TJ)
+        check("TJ gatefile: a tag, not Calvin; CI passes with no review read",
+              last(p) == 'needs-calvin=none review=not-needed judge=gate line removed or changed (gate: check "b" y)'
+              and p.returncode == 0 and not Api.calls, p.stdout + p.stderr)
+        repo, b = r.repo(judge, {"scripts/gate/gate-rules.py": tool.read_text() + "# new\n",
+                                 "scripts/gate/gate-rules.sha256": "pin2  gate-rules.py\n"})
+        p = jrun(repo, b, overlay=JUDGE, ci=True, **TJ)
+        check("TJ rulesfile: the rules and the pin are a tag",
+              last(p).startswith("needs-calvin=none review=not-needed judge=gate rules or pin changed (")
+              and p.returncode == 0, p.stdout + p.stderr)
+        repo, b = r.repo(judge, {".github/workflows/gate.yml": "on: push\n"})
+        p = jrun(repo, b, ci=True, **TJ)
+        check("TJ workflows: a tag", last(p) == "needs-calvin=none review=not-needed judge=CI workflow changed "
+              "(.github/workflows/gate.yml)" and p.returncode == 0, p.stdout + p.stderr)
+        repo, b = r.repo(judge, {"scripts/owned.sh": "o2\n"})
+        p = jrun(repo, b, ci=True, **TJ)
+        check("TJ codeowners: a tag", last(p) == "needs-calvin=none review=not-needed judge=codeowners: 1 path(s) "
+              "(scripts/owned.sh)" and p.returncode == 0, p.stdout + p.stderr)
+        repo, b = r.repo(judge, {".github/CODEOWNERS": "/scripts/owned.sh @someone\n", "scripts/owned.sh": "o2\n"})
+        p = jrun(repo, b, overlay=JUDGE, **TJ)
+        check("TJ: a PR that drops its own path from CODEOWNERS is still tagged, judged by the base's copy",
+              "judge=codeowners: 1 path(s) (scripts/owned.sh)" in last(p)
+              and "trusted judge refused" not in p.stdout, p.stdout)
+        repo, b = r.repo(judge, {"settings.json": cfg(deny=("Bash(sudo *)",))})
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ settings: a lost deny rule still needs Calvin (exit 1)",
+              last(p) == "needs-calvin=settings.json weakened (settings.json deny rule lost: Bash(rm -rf *)) "
+              "review=missing judge=none" and p.returncode == 1, p.stdout + p.stderr)
+        repo, b = r.repo(judge, {".gitignore": "/tmp/\n!/settings.json\n"})
+        check("TJ gitignore: still needs Calvin", "needs-calvin=.gitignore un-ignores" in last(jrun(repo, b, **TJ)))
+        repo, b = r.repo(judge, {"scripts/rm-guard.sh": "r2\n"})
+        check("TJ guards: still needs Calvin", "needs-calvin=hook guard changed" in last(jrun(repo, b, **TJ)))
+        repo, b = r.repo(judge, {}, delete=("notes.md",))
+        check("TJ deleted: still needs Calvin", "needs-calvin=deletes 1 tracked file(s)" in last(jrun(repo, b, **TJ)))
+        repo, b = r.repo(judge, {"settings.json": cfg(deny=("Bash(sudo *)",)), ".github/workflows/gate.yml": "on: push\n"})
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ mixed: Calvin for settings, a tag for the workflow, CI waits on him",
+              last(p).startswith("needs-calvin=settings.json weakened") and last(p).endswith(
+                  " review=missing judge=CI workflow changed (.github/workflows/gate.yml)") and p.returncode == 1,
+              p.stdout)
+        p = jrun(repo, b, ci=True, head="headsha", GITHUB_EVENT_NAME="schedule", **TJ)
+        check("TJ mixed outside a PR event: cannot decide (exit 2), tag kept",
+              p.returncode == 2 and "judge=CI workflow changed" in p.stderr, p.stdout + p.stderr)
+
+        def refused(change, path, overlay=(), label=""):
+            repo, b = r.repo(judge, change)
+            p = jrun(repo, b, overlay=overlay, ci=True, head="headsha", **TJ)
+            check(f"TJ refused: {label or path} not the base's copy, so today's rules (exit 1)",
+                  f"trusted judge refused: {path} is not the base's copy" in p.stdout and " judge=" not in last(p)
+                  and "review=missing" in last(p) and p.returncode == 1, p.stdout + p.stderr)
+        refused({"gate": 'check "a" x\nGATE_TRUSTED_JUDGE=1 check "b" y\n'}, "gate", label="a PR's own gate")
+        refused({"scripts/gate/gate-rules.py": tool.read_text().replace('"rulesfile", "workflows", "codeowners")',
+                                                                         '"rulesfile", "workflows", "codeowners", "settings")', 1)
+                 + "\n"}, "scripts/gate/gate-rules.py", label="a PR's own rules")
+        refused({"scripts/gate/gate-rules.sha256": "pin2  gate-rules.py\n", "scripts/owned.sh": "o2\n"},
+                "scripts/gate/gate-rules.sha256", label="the pin")
+        repo, b = r.repo(judge, {"scripts/owned.sh": "o2\n"})
+        (repo / "scripts/gate/gate-rules.sha256").unlink()
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ refused: the pin gone from the tree", "trusted judge refused: scripts/gate/gate-rules.sha256 is not "
+              "the base's copy" in p.stdout and p.returncode == 1, p.stdout + p.stderr)
+        refused({".github/CODEOWNERS": "/scripts/other.sh @calvindotsg\n", "gate": 'check "a" x\n'},
+                ".github/CODEOWNERS", overlay=("gate",))
+        repo, b = r.repo({k: v for k, v in judge.items() if k != "gate"}, {"gate": "check x\n", "scripts/owned.sh": "o2\n"})
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ refused: a gate the base never had", "trusted judge refused: gate is not the base's copy" in p.stdout
+              and p.returncode == 1, p.stdout)
+        repo, b = r.repo(judge, {"scripts/gate/fnmatch.py": "print('PLANTED')\n", "scripts/owned.sh": "o2\n"})
+        p = jrun(repo, b, overlay=JUDGE, ci=True, head="headsha", **TJ)
+        check("TJ refused: a module the PR added beside the rules (Python would import it)",
+              "trusted judge refused: scripts/gate/fnmatch.py is not the base's copy" in p.stdout
+              and p.returncode == 1, p.stdout + p.stderr)
+        p = jrun(repo, b, ci=True, head="headsha")
+        check("a module beside the rules never runs (its folder is off the import path)",
+              "PLANTED" not in p.stdout + p.stderr and "review=missing" in last(p), p.stdout + p.stderr)
+        repo, b = r.repo(judge, {"scripts/owned.sh": "o2\n"})
+        (repo / "scripts/gate/json").mkdir()
+        (repo / "scripts/gate/json/__init__.py").write_text("print('PLANTED')\n")
+        (repo / "scripts/gate/__pycache__").mkdir()
+        (repo / "scripts/gate/__pycache__/x.pyc").write_bytes(b"c")
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ refused: an untracked package beside the rules",
+              "trusted judge refused: scripts/gate/json/__init__.py is not the base's copy" in p.stdout
+              and p.returncode == 1, p.stdout + p.stderr)
+        shutil.rmtree(repo / "scripts/gate/json")
+        os.symlink("/tmp", repo / "scripts/gate/lnk")
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ refused: a symlinked folder beside the rules", "trusted judge refused: scripts/gate/lnk is not the "
+              "base's copy" in p.stdout and p.returncode == 1, p.stdout + p.stderr)
+        (repo / "scripts/gate/lnk").unlink()
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ: a __pycache__ beside the rules is not counted", "judge=codeowners: 1 path(s)" in last(p)
+              and p.returncode == 0, p.stdout + p.stderr)
+        os.chmod(repo / "gate", 0)
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        os.chmod(repo / "gate", 0o644)
+        check("TJ refused: a comparison that fails is a refusal, not trust",
+              "trusted judge refused: cannot compare the judge with the base" in p.stdout and " judge=" not in last(p)
+              and p.returncode == 1, p.stdout + p.stderr)
+        reset_api()
+        repo2, b2 = r.repo(judge, {"settings.json": cfg(deny=("Bash(sudo *)",)), "scripts/owned.sh": "o2\n"})
+        Api.status = 500
+        p = jrun(repo2, b2, ci=True, head="headsha", **TJ)
+        reset_api()
+        check("TJ: a review that cannot be read keeps the tag (exit 2)", p.returncode == 2
+              and "review=undecided judge=codeowners: 1 path(s)" in p.stderr, p.stdout + p.stderr)
+        repo, b = r.repo(judge, {".github/workflows/a\nneeds-calvin=none review=not-needed": "on: push\n"})
+        p = jrun(repo, b, **TJ)
+        check("TJ: a newline in a path stays on the tag's line",
+              last(p).startswith("needs-calvin=none review=not-needed judge=CI workflow changed (.github/workflows/a\\x0a")
+              and [l for l in p.stdout.splitlines() if l.startswith("needs-calvin=")][-1] == last(p)
+              and last(p).endswith(")"), p.stdout)
+        repo, b = r.repo(judge, {".github/workflows/a\nneeds-calvin=none review=not-needed": "on: push\n"})
+        p = r.run(repo, b)
+        check("a newline in a path never ends the reason as none", last(p).startswith(
+              "needs-calvin=CI workflow changed (.github/workflows/a\\x0aneeds-calvin=none"), p.stdout)
+        repo, b = r.repo(judge, {"scripts/owned.sh": "o2\n"})
+        (repo / "pin-copy").write_text((repo / "scripts/gate/gate-rules.sha256").read_text())
+        (repo / "scripts/gate/gate-rules.sha256").unlink()
+        os.symlink(repo / "pin-copy", repo / "scripts/gate/gate-rules.sha256")
+        p = jrun(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ refused: a judge file swapped for a symlink, same bytes behind it",
+              "trusted judge refused: scripts/gate/gate-rules.sha256 is not the base's copy" in p.stdout
+              and p.returncode == 1, p.stdout + p.stderr)
+        mark = r.dir / "mark"
+        mark.mkdir(exist_ok=True)
+        (mark / "fnmatch.py").write_text(
+            "print('KEPT')\nimport importlib.util, sysconfig\n"
+            "_s = importlib.util.spec_from_file_location('_f', sysconfig.get_paths()['stdlib'] + '/fnmatch.py')\n"
+            "_m = importlib.util.module_from_spec(_s)\n_s.loader.exec_module(_m)\nfnmatchcase = _m.fnmatchcase\n")
+        p = subprocess.run([sys.executable, "-I", "-c", "import runpy, sys; sys.path.insert(0, sys.argv[1]); "
+                            "sys.argv = ['gate-rules.py', '--base', sys.argv[3]]; "
+                            "runpy.run_path(sys.argv and __import__('os').environ['T'], run_name='__main__')",
+                            str(mark), "x", b], cwd=repo, env={"PATH": "/usr/bin:/bin", "T": str(tool)},
+                           capture_output=True, text=True, timeout=60)
+        check("an isolated run (-I) keeps its import path whole", "KEPT" in p.stdout and "needs-calvin=" in p.stdout,
+              p.stdout + p.stderr)
+        p = r.run(repo, b, ci=True, head="headsha", **TJ)
+        check("TJ refused: a rules file outside the repository",
+              "trusted judge refused: this rules file is outside the repository" in p.stdout and p.returncode == 1,
+              p.stdout)
+        p = jrun(repo, b, ci=True, head="headsha", GATE_TRUSTED_JUDGE="true")
+        check("TJ: only the value 1 asks; anything else is today's output",
+              last(p) == "needs-calvin=codeowners: 1 path(s) (scripts/owned.sh) review=missing"
+              and "trusted judge" not in p.stdout and p.returncode == 1, p.stdout)
+        p = jrun(repo, b)
+        check("TJ unset: no tag, no trusted-judge line",
+              last(p) == "needs-calvin=codeowners: 1 path(s) (scripts/owned.sh) review=skipped-local"
+              and "trusted judge" not in p.stdout, p.stdout)
 
         print("-- bytes that are not UTF-8 (F7) --")
         repo, b = r.repo({"a.txt": "a\n"}, {})
@@ -633,8 +814,8 @@ MUTATIONS = [
     ("first review, not latest, decides", "mine[-1][\"state\"] != \"APPROVED\"", "mine[0][\"state\"] != \"APPROVED\""),
     ("any reviewer counts", "            if (r.get(\"user\") or {}).get(\"login\") == approver\n            and ",
      "            if "),
-    ("API failure passes", "            return 2\n    print(f\"needs-calvin={reasons} review={state}\")",
-     "            return 0\n    print(f\"needs-calvin={reasons} review={state}\")"),
+    ("API failure passes", "            return 2\n    print(f\"needs-calvin={reasons} review={state}{tag}\")",
+     "            return 0\n    print(f\"needs-calvin={reasons} review={state}{tag}\")"),
     ("stale exits 0", "(\"missing\", \"stale\", \"self-authored\") else 0", "(\"missing\", \"self-authored\") else 0"),
     ("the secret value printed", "                    found.append(f\"{path}:{n} {kind}\")",
      "                    found.append(f\"{path}:{n} {kind} {text}\")"),
@@ -710,6 +891,44 @@ MUTATIONS = [
     ("workflows: never fires", "flows = [p for p in changed if p.startswith(\".github/workflows/\")]", "flows = []"),
     ("workflows: all of .github", "flows = [p for p in changed if p.startswith(\".github/workflows/\")]",
      "flows = [p for p in changed if p.startswith(\".github/\")]"),
+    ("TJ: settings judged as a tag", "JUDGE_RULES = (\"gatefile\", \"rulesfile\", \"workflows\", \"codeowners\")",
+     "JUDGE_RULES = (\"gatefile\", \"rulesfile\", \"workflows\", \"codeowners\", \"settings\")"),
+    ("TJ: codeowners not a tag", "JUDGE_RULES = (\"gatefile\", \"rulesfile\", \"workflows\", \"codeowners\")",
+     "JUDGE_RULES = (\"gatefile\", \"rulesfile\", \"workflows\")"),
+    ("TJ: judge never compared", "        if now != blob(base, path):", "        if False:"),
+    ("TJ: pin not compared", "    paths = [os.path.join(folder, \"gate-rules.sha256\"), \"gate\", *CODEOWNERS_FILES]",
+     "    paths = [\"gate\", *CODEOWNERS_FILES]"),
+    ("TJ: gate not compared", "    paths = [os.path.join(folder, \"gate-rules.sha256\"), \"gate\", *CODEOWNERS_FILES]",
+     "    paths = [os.path.join(folder, \"gate-rules.sha256\"), *CODEOWNERS_FILES]"),
+    ("TJ: CODEOWNERS not compared", "    paths = [os.path.join(folder, \"gate-rules.sha256\"), \"gate\", *CODEOWNERS_FILES]",
+     "    paths = [os.path.join(folder, \"gate-rules.sha256\"), \"gate\"]"),
+    ("TJ: a missing file on one side passes", "        if now != blob(base, path):",
+     "        if now is not None and blob(base, path) is not None and now != blob(base, path):"),
+    ("TJ: any value asks", "    if os.environ.get(\"GATE_TRUSTED_JUDGE\") != \"1\":", "    if not os.environ.get(\"GATE_TRUSTED_JUDGE\"):"),
+    ("TJ: outside the repository allowed", "    if rel.startswith(\"..\" + os.sep) or rel == \"..\":", "    if False:"),
+    ("TJ: tags still need Calvin", "    hits = [h for h in hits if h not in judged]\n", "    hits = hits\n"),
+    ("TJ: no tag printed", "    tag = f\" judge={", "    tag = \"\" and f\" judge={"),
+    ("TJ: a failed comparison trusted", "        trusted, refused = False, f\"cannot compare", "        trusted, refused = True, \"\" or f\"cannot compare"),
+    ("TJ: no tag when the review cannot be read", "review=undecided{tag}\\ngate-rules: cannot read", "review=undecided\\ngate-rules: cannot read"),
+    ("TJ: no tag outside a PR event", "review=undecided{tag}\\ngate-rules: a {event}", "review=undecided\\ngate-rules: a {event}"),
+    ("TJ: an empty tag for none", "judged)) or 'none'}\"", "judged)) or ''}\""),
+    ("TJ: no trusted-judge line", "        print(\"gate-rules: trusted judge: the base's", "        0 and print(\"gate-rules: trusted judge: the base's"),
+    ("TJ: files beside the rules not compared", "        paths += [os.path.relpath(os.path.join(root, f), top) for f in sorted(files)]\n", ""),
+    ("TJ: symlinked folders beside the rules not compared", "        paths += [os.path.relpath(os.path.join(root, d), top) for d in dirs if os.path.islink(os.path.join(root, d))]\n", ""),
+    ("TJ: __pycache__ counted", "        dirs[:] = sorted(d for d in dirs if d != \"__pycache__\")", "        dirs[:] = sorted(dirs)"),
+    ("control characters printed raw", "    return re.sub(r\"[\\x00-\\x1f\\x7f]\"", "    return re.sub(r\"[\\x00]\""),
+    ("the rules file's folder left on the import path", "    del sys.path[0]\n", "    pass\n"),
+    ("TJ: a symlinked judge file hashed through", "if os.path.isfile(here) and not os.path.islink(here) else", "if os.path.isfile(here) else"),
+    ("an isolated run loses its first path entry", "sys.path and not sys.flags.isolated and not", "sys.path and not"),
+    ("gatefile: binary diff", "\"--text\", \"--no-textconv\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\", \"gate\")",
+     "\"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\", \"gate\")"),
+    ("gatefile: textconv honoured", "\"--text\", \"--no-textconv\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\", \"gate\")",
+     "\"--text\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\", \"gate\")"),
+    ("gitignore: binary diff", "\"--text\", \"--no-textconv\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\",\n",
+     "\"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\",\n"),
+    ("gitignore: textconv honoured", "\"--text\", \"--no-textconv\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\",\n",
+     "\"--text\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\",\n"),
+    ("TJ: refusal silent", "        print(f\"gate-rules: trusted judge refused: {refused}", "        0 and print(f\"gate-rules: trusted judge refused: {refused}"),
     ("a non-merge guessed from the merge-base (F12)","        raise RuntimeError(\"HEAD is not GitHub's merge of this PR's head: pass --base\")\n", ""),
 ]
 

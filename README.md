@@ -189,6 +189,22 @@ answer of 25 Nov 2026, "option 2"). A change needs him when it:
 - `rulesfile`: touches `gate-rules.py` or its pin, `gate-rules.sha256`.
 - `workflows`: touches a file under `.github/workflows/`.
 
+With `GATE_TRUSTED_JUDGE=1`, a change to the judge lands on two keys with no review by him (his answer of
+26 Nov 2026, record 919abb82). The `gatefile`, `rulesfile`, `workflows` and `codeowners` hits no longer need
+him. They print as a tag, ` judge=<reasons>`, at the end of the last line, and merge-green holds such a PR to
+its two-key path. The other rules still need him.
+
+The tag counts only when the judge that runs is the base's own copy. In the working tree, each of these must
+match the base:
+
+- the rules file and every other file in its folder, the pin included;
+- the root `./gate`;
+- each CODEOWNERS file.
+
+If one differs, the run says which, and the rules need him as before. The rules file also drops
+its own folder from Python's import path, so a file a PR adds beside it never runs. A control character in a
+path prints as `\xNN`, so the last line stays one line.
+
 Each repository's `./gate` runs a vendored
 copy and fails if that copy's sha256 differs from its pin. `scripts/test-gate-rules.py [--mutate]` has a red
 fixture per rule.
