@@ -326,7 +326,10 @@ def config_safety(base: str, changed: list) -> list:
 
     ignores = []
     for path in [p for p in changed if p.rsplit("/", 1)[-1] == ".gitignore"]:
-        for line in git("--literal-pathspecs", "diff", "-U0", "--no-color", "--no-ext-diff", base, "HEAD", "--",
+        # --text --no-textconv: a PR's own .gitattributes (`.gitignore -diff`) must not turn the diff into "Binary
+        # files differ" and hide every line from this rule. The same holds for the gate below.
+        for line in git("--literal-pathspecs", "diff", "-U0", "--text", "--no-textconv", "--no-color", "--no-ext-diff",
+                        base, "HEAD", "--",
                         path).split("\n"):
             if line.startswith(("+++", "---")) or not line[:1] in ("+", "-"):
                 continue
@@ -352,7 +355,8 @@ def config_safety(base: str, changed: list) -> list:
 
     gate_lines = []
     if "gate" in changed:
-        for line in git("diff", "-U0", "--no-color", "--no-ext-diff", base, "HEAD", "--", "gate").split("\n"):
+        for line in git("--literal-pathspecs", "diff", "-U0", "--text", "--no-textconv", "--no-color", "--no-ext-diff",
+                        base, "HEAD", "--", "gate").split("\n"):
             if line.startswith("-") and not line.startswith("---"):
                 gate_lines.append(f"gate: {line[1:].strip()[:80]}")
     out.append(("gatefile", gate_lines, "gate line removed or changed"))

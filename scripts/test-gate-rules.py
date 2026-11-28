@@ -456,6 +456,18 @@ def run_suite(tool: Path) -> None:
         check("RED gatefile: a removed check line", "gate line removed or changed" in last(r.run(repo, b)))
         repo, b = r.repo(home, {"gate": 'check "a" x\ncheck "b" y\ncheck "c" z\n'})
         check("GREEN gatefile: a new check line", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
+        repo, b = r.repo(home, {"gate": 'check "a" x\n', ".gitattributes": "gate -diff\n"})
+        check("RED gatefile: a .gitattributes that marks the gate binary hides nothing",
+              "gate line removed or changed (gate: check \"b\" y)" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {"gate": 'check "a" x\n', ".gitattributes": "gate diff=fake\n"})
+        subprocess.run(["git", "-C", str(repo), "config", "diff.fake.textconv", "true"], check=True)
+        check("RED gatefile: a textconv driver hides nothing", "gate line removed or changed" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n", ".gitattributes": ".gitignore -diff\n"})
+        check("RED gitignore: a .gitattributes that marks it binary hides nothing",
+              "drops the ignore /skills/synced/" in last(r.run(repo, b)))
+        repo, b = r.repo(home, {".gitignore": "/tmp/\n!/settings.json\n", ".gitattributes": ".gitignore diff=fake\n"})
+        subprocess.run(["git", "-C", str(repo), "config", "diff.fake.textconv", "true"], check=True)
+        check("RED gitignore: a textconv driver hides nothing", "drops the ignore /skills/synced/" in last(r.run(repo, b)))
         repo, b = r.repo(home, {"x/gate": "g\n"})
         check("GREEN gatefile: only the root gate counts", last(r.run(repo, b)) == "needs-calvin=none review=not-needed")
 
@@ -908,6 +920,14 @@ MUTATIONS = [
     ("the rules file's folder left on the import path", "    del sys.path[0]\n", "    pass\n"),
     ("TJ: a symlinked judge file hashed through", "if os.path.isfile(here) and not os.path.islink(here) else", "if os.path.isfile(here) else"),
     ("an isolated run loses its first path entry", "sys.path and not sys.flags.isolated and not", "sys.path and not"),
+    ("gatefile: binary diff", "\"--text\", \"--no-textconv\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\", \"gate\")",
+     "\"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\", \"gate\")"),
+    ("gatefile: textconv honoured", "\"--text\", \"--no-textconv\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\", \"gate\")",
+     "\"--text\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\", \"gate\")"),
+    ("gitignore: binary diff", "\"--text\", \"--no-textconv\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\",\n",
+     "\"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\",\n"),
+    ("gitignore: textconv honoured", "\"--text\", \"--no-textconv\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\",\n",
+     "\"--text\", \"--no-color\", \"--no-ext-diff\",\n                        base, \"HEAD\", \"--\",\n"),
     ("TJ: refusal silent", "        print(f\"gate-rules: trusted judge refused: {refused}", "        0 and print(f\"gate-rules: trusted judge refused: {refused}"),
     ("a non-merge guessed from the merge-base (F12)","        raise RuntimeError(\"HEAD is not GitHub's merge of this PR's head: pass --base\")\n", ""),
 ]
